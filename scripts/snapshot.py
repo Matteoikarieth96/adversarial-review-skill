@@ -75,14 +75,21 @@ TOKEN_RUN = re.compile(r"[A-Za-z0-9_.-]{30,}")  # JWTs are found inside these ru
 B64URL = re.compile(r"[A-Za-z0-9_-]{10,}")
 KEYS = (r"(?:api[_-]?key|secret|token|passw(?:or)?d|private[_-]?key|access[_-]?key)"
         r"[A-Za-z0-9_]{0,40}")
-SEP = r"[\"']?\s*[:=]\s*"
+# A value on the same line, or (YAML) on the next line after "key:".
+SEP_LINE = r"[\"']?[ \t]*[:=][ \t]*"
+SEP_NEXT = r"[\"']?[ \t]*:[ \t]*\r?\n[ \t]*"
+NOT_A_KEY = r"(?![\w.-]+:(?:[ \t\r\n]|$))"  # the next line holds another key, not a value
 # Value masked in full; the key and the quotes stay.
-ASSIGN_QUOTED = re.compile(r"(?i)(" + KEYS + SEP + r")([\"'])([^\"'\r\n]{8,})\2")
-ASSIGN_BARE = re.compile(r"(?i)(" + KEYS + SEP + r")([^\s\"',;]{8,})")
+ASSIGN_QUOTED = re.compile(r"(?i)(" + KEYS + r"(?:" + SEP_LINE + r"|" + SEP_NEXT + r"))"
+                           r"([\"'])([^\"'\r\n]{8,})\2(?![ \t]*:)")
+ASSIGN_BARE = re.compile(r"(?i)(" + KEYS + r"(?:" + SEP_LINE + r"|" + SEP_NEXT + NOT_A_KEY + r"))"
+                         r"([^\s\"',;]{8,})")
 URL_CREDENTIALS = re.compile(r"(?i)(\b[a-z][a-z0-9+.-]{0,20}://[^\s:/@]+:)([^\s@/]+)(@)")
-# Bare values that are code, not literals: a call or a subscript whose argument
-# is empty or a name. Anything else is masked (masking too much beats leaking).
-CODE_VALUE = re.compile(r"[A-Za-z_][\w.]*[(\[](?:[A-Za-z_][\w.]*)?[)\]]?")
+# Bare values that are code, not literals: a known accessor (getenv, environ,
+# get_*, load_*...) called or indexed with a name or nothing. Anything else is
+# masked (masking too much beats leaking).
+CODE_VALUE = re.compile(r"(?:[A-Za-z_]\w*\.)*(?:getenv|environ(?:\.get)?|get|get_\w+|load_\w+|read_\w+"
+                        r"|fetch_\w+)[(\[](?:[A-Za-z_][\w.]*)?[)\]]?")
 
 MAX_COPY_BYTES = 50_000_000   # bigger files are not copied
 MAX_SCAN_BYTES = 20_000_000   # bigger files are copied but not redacted (listed)
@@ -203,25 +210,27 @@ def redact_text(text):
 
 def redact_bytes(data):
     """(new_data, redactions, reason_not_scanned or None). Bytes that are not
-    UTF-8 survive unchanged; UTF-16 is recognised by its byte order mark."""
+    UTF-8 survive unchanged; UTF-16 and UTF-32 are recognised by their byte
+    order mark and redacted even when they contain NUL characters."""
     if len(data) > MAX_SCAN_BYTES:
         return data, 0, "over the scan limit"
+    encodings = []
     if data.startswith((b"\xff\xfe\x00\x00", b"\x00\x00\xfe\xff")):
-        enc = "utf-32"
-    elif data.startswith((b"\xff\xfe", b"\xfe\xff")):
-        enc = "utf-16"
-    else:
-        enc = None
-    if enc:
+        encodings.append("utf-32")
+    if data.startswith((b"\xff\xfe", b"\xfe\xff")):
+        encodings.append("utf-16")
+    enc = None
+    for candidate in encodings:  # the first one that decodes wins
         try:
-            text = data.decode(enc)
+            text, enc = data.decode(candidate), candidate
+            break
         except UnicodeDecodeError:
-            return data, 0, "binary"
-        if "\0" in text:
-            return data, 0, "binary"
-    elif b"\0" in data[:8192]:
+            continue
+    if encodings and enc is None:
         return data, 0, "binary"
-    else:
+    if enc is None:
+        if b"\0" in data[:8192]:
+            return data, 0, "binary"
         text, enc = data.decode("utf-8", errors="surrogateescape"), "utf-8"
     new, n = redact_text(text)
     if not n:
@@ -311,7 +320,10 @@ def copy_tree(src, dest, res):
     os.fwalk opens every folder relative to its parent without following
     links, so swapping a folder for a link while the copy runs cannot lead
     outside src."""
-    for dirpath, dirnames, filenames, dirfd in os.fwalk(src, follow_symlinks=False):
+    def unreadable(err):
+        res.special.append(os.path.relpath(err.filename or "?", src) + "/ (unreadable)")
+
+    for dirpath, dirnames, filenames, dirfd in os.fwalk(src, follow_symlinks=False, onerror=unreadable):
         rel_dir = os.path.relpath(dirpath, src)
         out_dir = dest if rel_dir == "." else os.path.join(dest, rel_dir)
         keep, entries = [], list(filenames)
@@ -377,7 +389,9 @@ def fingerprint(root):
         raise FingerprintError("cannot list %s (%s)" % (q(err.filename or "?"), err.strerror))
 
     for dirpath, dirnames, filenames, dirfd in os.fwalk(root, follow_symlinks=False, onerror=fail):
-        dirnames.sort()
+        links = [d for d in dirnames if stat.S_ISLNK(os.stat(d, dir_fd=dirfd, follow_symlinks=False).st_mode)]
+        dirnames[:] = sorted(d for d in dirnames if d not in links)  # never open a linked folder
+        filenames = list(filenames) + links
         rel_dir = os.path.relpath(dirpath, root)
         for name in sorted(dirnames + filenames):
             rel = os.fsencode(os.path.normpath(os.path.join(rel_dir, name)))
@@ -498,7 +512,7 @@ def git_changes(src, dest, a):
         for n in dirnames + filenames:
             if os.path.islink(os.path.join(dirpath, n)):
                 rel = os.path.relpath(os.path.join(dirpath, n), src)
-                return "- git: not run (.git borrows from another repo: %s is a link)" % q(rel)
+                return "- git: not run (.git contains a link, which can point at another repo: %s)" % q(rel)
     base = a.git_base or "HEAD"
     if base.startswith("-"):
         return "- git: not run (the base must be a commit, not an option: %s)" % q(base)
@@ -569,7 +583,7 @@ def manifest(src, copy, res):
     for rel, target in res.links_skipped[:MAX_LISTED]:
         lines.append("  - %s -> %s (skipped)" % (q(rel), q(target)))
     lines.append("- secret files left out (names only): %s" % q_list(res.secrets))
-    lines.append("- special files not copied (FIFOs, sockets, devices, changed while copying): %s"
+    lines.append("- not copied (FIFOs, sockets, devices, unreadable, or changed while copying): %s"
                  % q_list(res.special))
     lines.append("- files over %d MB not copied: %s" % (MAX_COPY_BYTES // 1_000_000, q_list(res.too_big)))
     lines.append("- secret-looking values redacted: %s" % q_list(

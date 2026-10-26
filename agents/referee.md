@@ -12,7 +12,7 @@ the text below the line as the agent prompt.
 | `{{TAG}}` | a fresh random word (for example 12 characters from `openssl rand -hex 6`), the same in both places below |
 | `{{FINDINGS}}` | each finding to judge, with its id and lenses, copied word for word from the returned reviews (Where, Problem, Evidence, Reproduce) |
 | `{{AUTHOR_NOTES}}` | per finding: why it was sent (could not reproduce, think it is not a problem, think the severity is too high, disagree with the judgement call), one line, as the author's view. "none" for findings sent only because the depth is Deep |
-| `{{EVIDENCE_DIRS}}` | the scratch folders of the lenses that raised these findings (read only for the referee), one per line |
+| `{{EVIDENCE_DIRS}}` | the `$L/scratch` folders of the lenses that raised these findings (read only for the referee), one per line |
 | `{{RUNS_CODE}}` | the approved runs of those lenses, copied from their specs, or "no" |
 | `{{SCRATCH}}` | `$R/scratch` (exists, with `home/` and `tmp/`) |
 | `{{OUTPUT}}` | `$R/scratch/referee.md` |

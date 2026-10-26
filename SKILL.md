@@ -116,14 +116,17 @@ when the system prompt names one, otherwise inside `mktemp -d`. You make up
 deliverable's name.
 
 ```
-$WS/input/brief.md      the brief (read only from step 3 on)
+$WS/input/brief.md      the brief (read only from the end of step 1)
 $WS/input/target/       the snapshot (read only)
 $WS/input/changes.diff  what this session changed in a git repo, if any
-$WS/reviews/            one file per agent
-$WS/scratch/<slug>/     one per agent, created in step 4
-$WS/referee.XXXXXX/     fresh random folders for the referee (step 5)
-$WS/recheck.XXXXXX/     and the re-checkers (step 7), made with mktemp -d
+$WS/lens-<slug>.XXXXXX/ one fresh folder per reviewer (step 4): its own
+                        copy of the input, its scratch, its review
+$WS/referee.XXXXXX/     the same for the referee (step 5)
+$WS/recheck.XXXXXX/     and the re-checkers (step 7), all made with mktemp -d
 ```
+
+No step ever deletes anything in `$WS`: when something looks wrong, make a
+fresh folder instead.
 
 `$PRIVATE` is a second folder next to `$WS`, never inside it:
 `mktemp -d "<the folder that holds $WS>/private.XXXXXX"` (a plain
@@ -137,7 +140,7 @@ untouched. For files and folders use the script (Python 3.9+, standard
 library, plus git):
 
 ```bash
-python3 -I "$SKILL/scripts/snapshot.py" '<deliverable>' "$WS/input/target" \
+python3 -I -S "$SKILL/scripts/snapshot.py" '<deliverable>' "$WS/input/target" \
   [--session-work] [--git-base <commit the task started from>] [--diff-out "$WS/input/changes.diff"]
 ```
 
@@ -167,7 +170,7 @@ the target, tell the user, and do not hand anything to the agents.
 The script does not cover the items below. Save them by hand into
 `$PRIVATE/handmade/`, never straight into the target (that would skip the
 redaction), then snapshot that folder into the same target:
-`python3 -I "$SKILL/scripts/snapshot.py" "$PRIVATE/handmade" "$WS/input/target"`.
+`python3 -I -S "$SKILL/scripts/snapshot.py" "$PRIVATE/handmade" "$WS/input/target"`.
 - Text that exists only in this conversation (a drafted post, an email, an
   answer): save it verbatim as a file.
 - Anything only you can reach (an Artifact, a Notion page, a Google Doc, a
@@ -219,21 +222,25 @@ to an agent; steps 5 and 6 compare them with the findings and show them to
 the user.
 
 **Lock the input** before any agent sees it: make it read only, keep a
-pristine copy, and take two fingerprints.
+pristine copy, and take fingerprints of the input and of this skill's own
+files.
 
 ```bash
 chmod -R a-w "$WS/input"
 cp -R "$WS/input" "$PRIVATE/input-pristine"
-python3 -I "$SKILL/scripts/snapshot.py" --fingerprint "$PRIVATE/input-pristine"
-shasum -a 256 "$SKILL/scripts/snapshot.py"
+python3 -I -S "$SKILL/scripts/snapshot.py" --fingerprint "$PRIVATE/input-pristine"
+/usr/bin/shasum -a 256 "$SKILL"/SKILL.md "$SKILL"/agents/*.md "$SKILL"/references/*.md "$SKILL"/scripts/snapshot.py
 ```
 
-Keep both printed values in this conversation (your own notes, not only a
-file): a steered agent runs as the user and could find and edit any file,
-including `$PRIVATE` and the script itself, but not your context. Before
-every later use of the script, check its `shasum` first. The `chmod` stops
-accidents, not such an agent. If a fingerprint cannot be taken, stop and
-tell the user.
+(`sha256sum` where `/usr/bin/shasum` is missing.) Keep the printed values in
+this conversation (your own notes, not only a file), and read every file in
+`agents/` and `references/` now: fill every later prompt from what you read
+now, and keep known items and returned reviews in your context too. A
+steered agent runs as the user and could find and edit any file, including
+`$PRIVATE`, the skill's prompts and the script, but not your context. Before
+running the script or reading a skill file again, check the `shasum` list
+first; any difference: stop and tell the user. The `chmod` stops accidents,
+not such an agent. If a fingerprint cannot be taken, stop and tell the user.
 
 ## Step 2. Design the panel (a fresh agent)
 
@@ -301,27 +308,39 @@ depth or just hurry ("quick please"), take them as the depth and say so in
 those lines. Approval to run code is the one thing a skip does not cover: if
 a lens runs code, ask a yes or no for those runs, or set them to "no".
 
-If the answer changes the brief (concerns, lenses), first check `$WS/input`
-against your fingerprint, then edit `$WS/input/brief.md` (`chmod u+w` the
-file, edit, `chmod a-w` again), replace the pristine copy with a fresh
-`cp -R`, and keep the new fingerprint instead of the old one.
+If the answer changes the brief (concerns, lenses), change it in the
+pristine copy, which every agent's copy comes from from now on: check the
+pristine copy against your fingerprint (different: stop and tell the user),
+then `chmod u+w "$PRIVATE/input-pristine/brief.md"`, edit it, `chmod a-w` it
+again, and keep its new fingerprint instead of the old one. `$WS/input` stays
+as the designer saw it.
 
 ## Step 4. Launch the panel
 
-First fingerprint `$WS/input` and compare it with your value. If it differs,
-the panel designer changed the input: that is a finding, and the reviewers
-must not get the changed version. Check the pristine copy against the value
-too, then rebuild the input from it:
-`chmod -R u+w "$WS/input" && rm -rf "$WS/input" && cp -R "$PRIVATE/input-pristine" "$WS/input"`.
+First check the script's `shasum`, then fingerprint `$WS/input` and the
+pristine copy. `$WS/input` different from the value it had at the end of
+step 1: the panel designer changed it, which is a finding (nothing is
+deleted; reviewers never read it). The pristine copy different from your
+value: stop and tell the user. Check also that `$WS` is still the folder you
+made (`test ! -L "$WS"`).
 
-Create `$WS/scratch/<slug>/` with `home/` and `tmp/` inside, one per lens.
-In ONE message, launch every reviewer at once with the Agent tool
+Then give every reviewer its own fresh folder and its own copy:
+
+```bash
+L=$(mktemp -d "$WS/lens-<slug>.XXXXXX")
+cp -R "$PRIVATE/input-pristine" "$L/input" && mkdir -p "$L/scratch/home" "$L/scratch/tmp"
+```
+
+Fingerprint each `$L/input`: it must match your value. A reviewer then
+cannot change what another reviewer, the referee or a re-checker reads,
+except by reaching into their folders, which the checks after it returns
+show. In ONE message, launch every reviewer at once with the Agent tool
 (`subagent_type: general-purpose`), in parallel. Each prompt is
 [agents/reviewer.md](agents/reviewer.md) with its placeholders filled from
 the designer's spec, copied as written. Nothing else goes in. Note the start
 time.
 
-Each reviewer writes `$WS/reviews/<slug>.md` and returns the same text. The
+Each reviewer writes `$L/scratch/review.md` and returns the same text. The
 text returned to you, in your context, is the one you trust; also save it in
 `$PRIVATE/returned/<slug>.md` for the report, but copy from your context, not
 from a file, whenever it feeds another agent.
@@ -332,13 +351,13 @@ report that the review was not independent.
 
 ## Step 5. Verify and merge
 
-Read [references/report.md](references/report.md) for labels, the verdict
-rules and the report template. In order:
+Use [references/report.md](references/report.md), as you read it in step 1,
+for labels, the verdict rules and the report template. In order:
 
-1. **Completeness.** Fingerprint `$WS/input` again, referee or not: a
-   difference means a reviewer changed the input, which is a finding. Work
-   from the returned text; if the file in `reviews/`
-   differs, note it, and ignore any review file no agent of yours returned.
+1. **Completeness.** Fingerprint every `$L/input` again, referee or not: a
+   difference means an agent changed a reviewer's input, which is a finding.
+   Work from the returned text; if a review file differs from it, note it,
+   and ignore any review file no agent of yours returned.
    A lens that failed, returned nothing, or shows no concrete check in "What
    holds" or "Not checked" is relaunched once. Still missing: the verdict
    says "incomplete" and names the lens.
@@ -356,14 +375,12 @@ rules and the report template. In order:
    reason; they do not move the verdict.
 4. **Referee.** If anything went to it, or the depth is Deep, launch one
    fresh agent with [agents/referee.md](agents/referee.md). In Deep it
-   reviews every Critical and High, confirmed or not. First fingerprint
-   both `"$WS/input"` and `"$PRIVATE/input-pristine"` with
-   `snapshot.py --fingerprint` and compare each with the value you kept.
-   `$WS/input` different: an agent changed the shared input, which is a
-   finding. The pristine copy different: stop and tell the user, because
-   nothing can be checked against it any more. Then give the referee a
-   fresh folder with a random name (so nothing could be planted there in
-   advance) and a copy of the pristine input:
+   reviews every Critical and High, confirmed or not. First check the
+   skill's `shasum` list and the pristine copy's fingerprint (different:
+   stop and tell the user, because nothing can be checked against it any
+   more). Then give the referee a fresh folder with a random name (so
+   nothing could be planted there in advance) and a copy of the pristine
+   input:
 
    ```bash
    R=$(mktemp -d "$WS/referee.XXXXXX")
@@ -375,7 +392,8 @@ rules and the report template. In order:
    Its rulings (Confirmed, Confirmed at a new severity, Rejected, Could not
    check) are final; "Could not check" keeps the finding open. Use only the
    rows for ids you sent; ignore any other.
-5. **Known items.** Compare `$PRIVATE/known.md` with the findings. Found by
+5. **Known items.** Compare your known items (as you wrote them, from your
+   context; `$PRIVATE/known.md` is the record) with the findings. Found by
    the panel: mark them "known", and the higher of your severity and the
    panel's applies. Not found: they go in the report with your severity. An
    open Critical or High known item counts in the verdict and goes in Fix
@@ -413,7 +431,9 @@ question.
 
 1. Before the first fix, make sure the user can go back: copy the
    originals with
-   `mkdir -p "$PRIVATE/originals" && cp -RH '<deliverable>' "$PRIVATE/originals/"`
+   `mkdir -p "$PRIVATE/originals/1" && cp -RH '<deliverable>' "$PRIVATE/originals/1/"`
+   (one numbered folder per deliverable, so two with the same name do not
+   overwrite each other)
    (`-H` copies the real folder when the deliverable path is a link) and
    keep the `--fingerprint` of the copy in your notes (the redacted snapshot
    is not a backup). Do not run `git commit` or `git stash` yourself: they
@@ -432,7 +452,7 @@ question.
    ```bash
    V=$(mktemp -d "$WS/recheck.XXXXXX")
    cp -R "$PRIVATE/input-pristine" "$V/before"
-   python3 -I "$SKILL/scripts/snapshot.py" '<deliverable>' "$V/target"
+   python3 -I -S "$SKILL/scripts/snapshot.py" '<deliverable>' "$V/target"
    diff -ruN "$V/before/target" "$V/target" > "$V/fix.diff"
    ```
 

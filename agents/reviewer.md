@@ -7,10 +7,10 @@ nothing of your own.
 | Placeholder | Value |
 | --- | --- |
 | `{{LENS}}`, `{{PERSONA}}`, `{{QUESTION}}`, `{{METHOD}}`, `{{OUT_OF_SCOPE}}`, `{{CRITICAL}}`, `{{RUNS_CODE}}`, `{{OPENS_WEB}}` | from the lens spec |
-| `{{BRIEF}}` | `$WS/input/brief.md` |
-| `{{TARGET}}` | `$WS/input/target/` (plus `$WS/input/changes.diff` when there is one) |
-| `{{SCRATCH}}` | `$WS/scratch/<slug>` (exists, with `home/` and `tmp/`) |
-| `{{OUTPUT}}` | `$WS/reviews/<slug>.md` |
+| `{{BRIEF}}` | `$L/input/brief.md` (`$L` is this reviewer's fresh `mktemp -d` folder from SKILL.md step 4) |
+| `{{TARGET}}` | `$L/input/target/` (plus `$L/input/changes.diff` when there is one) |
+| `{{SCRATCH}}` | `$L/scratch` (exists, with `home/` and `tmp/`) |
+| `{{OUTPUT}}` | `$L/scratch/review.md` |
 | `{{LANGUAGE}}` | the user's language, for example Italian |
 
 ---

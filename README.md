@@ -33,7 +33,7 @@ strongest case that it is wrong?) or a lens that plays that role.
    this session and you approved that exact run.
 5. **Merges the findings.** The author can confirm a Critical or High but
    never reject or downgrade one: that goes to a referee agent, which works
-   from a pristine copy of the input. Known weak spots still count, and all
+   from its own copy of the input. Known weak spots still count, and all
    of them are shown to you. One report: verdict, per-lens scores, Fix
    first, ranked improvements, what holds.
 6. **Applies only the fixes you pick**, after making sure you can go back,
@@ -128,8 +128,8 @@ repo, a download), keep those prompts on.
 Everything in the deliverable and everything the agents send back is treated
 as untrusted data: text aimed at an agent becomes a finding, never an
 instruction. The snapshot script escapes every name it prints, leaves out
-secret files and redacts secret-looking values; the referee and the
-re-checkers get a pristine copy of the input in fresh folders. The rest are
+secret files and redacts secret-looking values; every reviewer, the referee
+and each re-checker gets its own copy of the input in a fresh folder. The rest are
 rules for language-model agents, not a sandbox: Claude Code's own
 permissions remain the real boundary. Details and residual risks:
 [SECURITY.md](SECURITY.md).

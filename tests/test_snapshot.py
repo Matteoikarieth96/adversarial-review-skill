@@ -450,6 +450,48 @@ class SnapshotTest(unittest.TestCase):
         self.assertNotIn(long_pw, snapshot.redact_text(cases[3])[0])
         self.assertNotIn("L" * 100, snapshot.redact_text(cases[4])[0])
 
+    def test_yaml_parent_keys_do_not_swallow_the_value(self):
+        pw = "Sup3r" + "S3cretPassw0rd"
+        for text in ("secrets:\n  db_password: " + pw + "\n", "token =\npassword = " + pw + "\n",
+                     "tokens:\n  github_token: " + pw + "\n", 'secrets:\n  "db_password": "' + pw + '"\n'):
+            new, n = snapshot.redact_text(text)
+            self.assertNotIn(pw, new, text)
+
+    def test_values_shaped_like_code_are_masked_unless_known_accessors(self):
+        for key, value in (("DB_PASSWORD=", "Tr0ub4dor" + "(x)"), ("password: ", "Spring" + "[Summer]"),
+                           ("api_key=", "hunter2" + "hunter2(")):
+            self.assertNotIn(value, snapshot.redact_text(key + value)[0], key)
+        for code in ("password = os.getenv(name)", "secret = environ[key]", "token = get_token()"):
+            self.assertEqual(snapshot.redact_text(code), (code, 0), code)
+
+    def test_utf16_with_nul_characters_is_still_redacted(self):
+        data = ("\0api_key = " + FAKE_KEY + "\n").encode("utf-16")
+        new, n, why = snapshot.redact_bytes(data)
+        self.assertGreaterEqual(n, 1)
+        self.assertNotIn(FAKE_KEY, new.decode("utf-16"))
+
+    def test_fingerprint_does_not_open_linked_folders(self):
+        locked = os.path.join(self.tmp, "locked-dir")
+        os.makedirs(locked)
+        os.chmod(locked, 0)
+        try:
+            os.symlink(locked, os.path.join(self.src, "link-to-locked"))
+            os.unlink(os.path.join(self.src, "abs-out"))
+            os.unlink(os.path.join(self.src, "rel-out"))
+            self.assertEqual(len(snapshot.fingerprint(self.src)), 64)
+        finally:
+            os.chmod(locked, 0o700)
+
+    def test_unreadable_folder_is_listed(self):
+        locked = os.path.join(self.src, "private-dir")
+        write(os.path.join(locked, "a.txt"), "x")
+        os.chmod(locked, 0)
+        try:
+            out = run(self.src, self.dest)
+        finally:
+            os.chmod(locked, 0o700)
+        self.assertIn("private-dir/ (unreadable)", out)
+
     def test_utf32_text_is_redacted(self):
         with open(os.path.join(self.src, "wide32.txt"), "wb") as fh:
             fh.write(("api_key = " + FAKE_KEY + "\n").encode("utf-32"))
@@ -483,7 +525,7 @@ class SnapshotTest(unittest.TestCase):
         os.rename(os.path.join(self.src, ".git", "objects"), other)
         os.symlink(other, os.path.join(self.src, ".git", "objects"))
         out = run(self.src, self.dest, "--session-work", "--diff-out", self.diff_path())
-        self.assertIn("is a link", out)
+        self.assertIn(".git contains a link", out)
         self.assertFalse(os.path.exists(self.diff_path()))
 
     def test_failure_removes_the_partial_copy(self):
