@@ -78,21 +78,25 @@ B64URL = re.compile(r"[A-Za-z0-9_-]{10,}")
 # the whole word anyway, and retrying made long runs of key words slow.
 KEYS = (r"(?:api[_-]?key|secret|token|passw(?:or)?d|private[_-]?key|access[_-]?key)"
         r"(?=(?P<sfx>[A-Za-z0-9_]{0,40}))(?P=sfx)")
-# Separators: any spacing but line breaks (NBSP and other Unicode spaces too),
-# at most one line break before ":" or "=", and the value either on the same
-# line or on the next one (a blank line allowed) unless that line is a key.
+# Separators: any spacing but line breaks (NBSP and other Unicode spaces too).
+# The value is on the same line, or on the next line (a blank line allowed)
+# when that line is not itself a key. A next-line bare value holds no brackets,
+# so a call written on the next line is never masked (that could hide code).
 WS = r"[^\S\r\n]"
 LB = r"(?:\r\n|\r|\n)"
-PRE = r"[\"']?" + WS + r"*(?:" + LB + WS + r"*)?"
-SEP_LINE = PRE + r"[:=]" + WS + r"*"
-SEP_NEXT = PRE + r"[:=]" + WS + r"*(?:" + LB + WS + r"*){1,2}"
-NOT_A_KEY = r"(?![\"']?[\w.-]+[\"']?" + WS + r"*[:=](?:\s|$))"
-# Value masked in full; the key and the quotes stay.
+SEP_LINE = r"[\"']?" + WS + r"*[:=]" + WS + r"*"
+SEP_NEXT = r"[\"']?" + WS + r"*[:=]" + WS + r"*(?:" + LB + WS + r"*){1,2}"
+# "key: ..." or "key=value" or "key = value"; a base64 value ending in "=" is not a key.
+NOT_A_KEY = r"(?![\"']?[\w.-]+[\"']?" + WS + r"*(?::(?:\s|$)|=" + WS + r"*[^\s=]))"
+NOT_A_QKEY = r"(?![\"'][\w.-]+[\"']" + WS + r"*[:=])"
+# Value masked in full; the key and the quotes stay. The same-line passes run
+# first, so a next-line pass that masks a quoted key masks nothing secret.
 ASSIGN_QUOTED_LINE = re.compile(r"(?i)(?P<key>" + KEYS + SEP_LINE + r")(?P<q>[\"'])(?P<val>[^\"'\r\n]{8,})(?P=q)")
-ASSIGN_QUOTED_NEXT = re.compile(r"(?i)(?P<key>" + KEYS + SEP_NEXT + NOT_A_KEY + r")(?P<q>[\"'])"
-                                r"(?P<val>[^\"'\r\n]{8,})(?P=q)(?!" + WS + r"*:)")
-ASSIGN_BARE = re.compile(r"(?i)(?P<key>" + KEYS + r"(?:" + SEP_LINE + r"|" + SEP_NEXT + NOT_A_KEY + r"))"
-                         r"(?P<val>[^\s\"',;]{8,})")
+ASSIGN_QUOTED_NEXT = re.compile(r"(?i)(?P<key>" + KEYS + SEP_NEXT + NOT_A_QKEY + r")(?P<q>[\"'])"
+                                r"(?P<val>[^\"'\r\n]{8,})(?P=q)")
+ASSIGN_BARE = re.compile(r"(?i)(?P<key>" + KEYS + SEP_LINE + r")(?P<val>[^\s\"',;]{8,})")
+ASSIGN_BARE_NEXT = re.compile(r"(?i)(?P<key>" + KEYS + SEP_NEXT + NOT_A_KEY + r")"
+                              r"(?P<val>[^\s\"',;()\[\]{}]{8,})(?!\S)")
 URL_CREDENTIALS = re.compile(r"(?i)(\b[a-z][a-z0-9+.-]{0,20}://[^\s:/@]+:)([^\s@/]+)(@)")
 # Bare values that are code, not literals: a known accessor (getenv, environ,
 # get_*, load_*...) called or indexed with a name or nothing. Anything else is
@@ -103,12 +107,20 @@ ACCESSORS = {"getenv", "get", "environ"}
 ACCESSOR_PREFIXES = ("get_", "load_", "read_", "fetch_")
 
 
+IDENT = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+
+
 def is_code_value(value):
     if not CODE_SHAPE.fullmatch(value):
         return False
     name = re.split(r"[(\[]", value, maxsplit=1)[0]
-    last = name.rsplit(".", 1)[-1]
-    return last in ACCESSORS or name.endswith("environ.get") or last.startswith(ACCESSOR_PREFIXES)
+    parts = name.split(".")
+    if not all(IDENT.fullmatch(p) for p in parts):  # no empty, digit-first or non-ASCII names
+        return False
+    last = parts[-1]
+    if last in ACCESSORS or name.endswith("environ.get"):
+        return True
+    return any(last.startswith(p) and len(last) > len(p) for p in ACCESSOR_PREFIXES)
 
 
 MAX_COPY_BYTES = 50_000_000   # bigger files are not copied
@@ -225,6 +237,7 @@ def redact_text(text):
     text = ASSIGN_QUOTED_LINE.sub(sub_quoted, text)
     text = ASSIGN_QUOTED_NEXT.sub(sub_quoted, text)
     text = ASSIGN_BARE.sub(sub_bare, text)
+    text = ASSIGN_BARE_NEXT.sub(sub_bare, text)
     text = URL_CREDENTIALS.sub(sub_url, text)
     return text, count
 
@@ -368,8 +381,11 @@ def copy_tree(src, dest, res):
                 keep.append(d)
         dirnames[:] = keep
         for f in sorted(entries):
-            copy_entry(src, dirfd, f, os.path.join(out_dir, f),
-                       os.path.normpath(os.path.join(rel_dir, f)), res)
+            rel = os.path.normpath(os.path.join(rel_dir, f))
+            try:
+                copy_entry(src, dirfd, f, os.path.join(out_dir, f), rel, res)
+            except PermissionError:
+                res.special.append(rel + " (unreadable)")
     # A kept link can still leave the copy when something it went through was
     # left out: check every link again in the copy itself.
     root = os.path.realpath(dest)

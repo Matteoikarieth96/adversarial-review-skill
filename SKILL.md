@@ -122,7 +122,7 @@ $WS/input/changes.diff  what this session changed in a git repo, if any
 $WS/lens-<slug>.XXXXXX/ one fresh folder per reviewer (step 4): its own
                         copy of the input, its scratch, its review
 $WS/referee.XXXXXX/     the same for the referee (step 5)
-$WS/recheck.XXXXXX/     and the re-checkers (step 7), all made with mktemp -d
+$WS/recheck-<slug>.XXXXXX/ and each re-checker (step 7), all made with mktemp -d
 ```
 
 No step ever deletes anything in `$WS`: when something looks wrong, make a
@@ -132,9 +132,10 @@ fresh folder instead.
 `mktemp -d "<the folder that holds $WS>/private.XXXXXX"` (a plain
 `mktemp -d` can land outside the scratchpad). Its path is never given to any
 agent, but agents could still find it: it keeps things out of their prompts,
-it is not a lock. Write records there only as new files (check
-`test ! -e <path> && test ! -L <path>` first; if the path exists, pick
-another name). Your known items, the panel notes and a pristine copy of
+it is not a lock. Create it, and `$PRIVATE/returned/`, before any agent runs,
+note its real path (`cd "$PRIVATE" && pwd -P`), and before every later write
+or `mktemp` in it check `test ! -L "$PRIVATE"` and that real path. Write
+records only as new files (`test ! -e <path> && test ! -L <path>` first). Your known items, the panel notes and a pristine copy of
 the input live there.
 
 **Snapshot.** Every reviewer sees the same version, and the originals stay
@@ -318,7 +319,8 @@ then `chmod u+w "$PRIVATE/input-pristine/brief.md"`, edit it, `chmod a-w` it
 again, and fingerprint it. From then on keep two values: the step 1 value
 (what `$WS/input` must still match) and the new pristine value. `$WS/input`
 stays as the designer saw it; a designer relaunched for an added lens gets a
-fresh `mktemp -d` copy of the pristine input instead.
+fresh copy instead, checked like the reviewers' copies in step 4:
+`D=$(mktemp -d "$WS/designer.XXXXXX") && echo "$D" && cp -R "$PRIVATE/input-pristine" "$D/input"`.
 
 ## Step 4. Launch the panel
 
@@ -476,7 +478,7 @@ question.
    write the lens's review to `$V/<slug>-review.md` from the text it
    returned to you (your context, not a file), create `$V/scratch/<slug>/`
    with `home/` and `tmp/`, and only then make the inputs read only:
-   `chmod -R a-w "$V/before" "$V/target" "$V/fix.diff" "$V"/*-review.md`.
+   `chmod -R a-w "$V/before" "$V/target" "$V/fix.diff" "$V/<slug>-review.md"`.
    Launch one agent per lens that raised a fixed Critical or High (at most
    3) with [agents/rechecker.md](agents/rechecker.md); when the fixes
    rewrote a large part of the deliverable, add Goal fit. When they return,

@@ -5,8 +5,8 @@ Add nothing else: no hints about what to look for.
 
 | Placeholder | Value |
 | --- | --- |
-| `{{BRIEF}}` | `$WS/input/brief.md` |
-| `{{TARGET}}` | `$WS/input/target/` |
+| `{{BRIEF}}` | `$WS/input/brief.md` (for a relaunch in step 3: `$D/input/brief.md`) |
+| `{{TARGET}}` | `$WS/input/target/` (for a relaunch: `$D/input/target/`) |
 | `{{LENSES}}` | absolute path of this skill's `references/lenses.md` |
 | `{{DEPTH}}` | Quick, Standard or Deep |
 | `{{LANGUAGE}}` | the user's language |

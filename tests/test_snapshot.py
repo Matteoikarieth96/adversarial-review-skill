@@ -499,7 +499,9 @@ class SnapshotTest(unittest.TestCase):
         layouts = [
             "password: " + pw, "Password : " + pw, "password:\u00a0" + pw, "password:\u3000" + pw,
             "password=\x0c" + pw, "password:\r" + pw + "\r", "password =\n    " + pw,
-            "password\n= " + pw, 'password =\n"' + pw + '"', "password:\n\n  " + pw,
+'password =\n"' + pw + '"', "password:\n\n  " + pw,
+            "secret:\n  " + pw + "=", 'password:\n  "pass: ' + pw + '"', "token:\n  " + pw + "==",
+            "fernet_secret_key:\n    " + pw + "a2V5X2Zvcl90ZXN0aW5nX29ubHk=", 'password = "' + pw + '"\u00a0:',
             'token = "' + pw + '":', "API_KEY" + " " * 12 + "= " + pw, "password:\n  " + pw,
             "secrets:\n  db_password: " + pw, "token =\npassword = " + pw,
             "tokens:\n  github_token: " + pw, 'secrets:\n  "db_password": "' + pw + '"',
@@ -516,6 +518,17 @@ class SnapshotTest(unittest.TestCase):
                      "secret = os.environ[", "api_key = load_key()", "password = os.getenv(name)",
                      "secret = environ[key]", "token = get_token()"):
             self.assertEqual(snapshot.redact_text(code), (code, 0), code)
+
+    def test_calls_on_the_next_line_are_not_masked(self):
+        # masking these would hide what the code does from a security reviewer
+        for code in ("const token =\n  require('child_process').execSync(cmd)",
+                     "secret_handler\n= __import__('os').system(x)",
+                     "token = a..get_(Hunter2Sup3r)"):
+            new, n = snapshot.redact_text(code)
+            if "a..get_" in code:
+                self.assertNotIn("Hunter2Sup3r", new)
+            else:
+                self.assertIn("child_process" if "child" in code else "__import__", new)
 
     def test_code_check_uses_little_memory_on_long_values(self):
         value = "a." * 200_000 + "get_x(ccc!"
