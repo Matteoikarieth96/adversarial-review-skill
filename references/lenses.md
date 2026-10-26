@@ -31,7 +31,7 @@ Fill these for every lens; they become the reviewer prompt placeholders.
 | Field | What to write |
 | --- | --- |
 | name | A short name, in the user's language for the intake table |
-| slug | kebab-case, in English, used for file and folder names |
+| slug | kebab-case, in English, 1 to 40 characters matching `^[a-z0-9][a-z0-9-]{0,39}$`, unique; used for file and folder names |
 | persona | Who they are, in one line, as concrete as possible ("a shop owner reading it on a phone between two customers", not "a reader") |
 | question | The single question this lens answers |
 | method | The kind of check (run it, recompute, trace sources, read it as the persona, attack the claims in the brief) with the concrete inputs or readings that fit this output. Never a guess at a specific defect |
@@ -69,6 +69,8 @@ Fill these for every lens; they become the reviewer prompt placeholders.
   where do they get lost, misread it or give up?
 - Method: read, open or use it cold, on their device and in their setting
   (phone at 375 px, a feed, a printed page, a terminal on a clean machine).
+  Using something that executes is an approved run; otherwise simulate it
+  by reading.
 - Critical: the intended reader misreads the main point or cannot use it.
 
 ## Catalog by output type
@@ -79,9 +81,10 @@ Fill these for every lens; they become the reviewer prompt placeholders.
 - **Security**: untrusted input reaching a shell, a path, HTML or SQL;
   secrets in code, logs or command lines; permissions; network exposure;
   dependencies and supply chain.
-- **Operability**: install from a clean state, what happens when it fails at
-  3 a.m., logs, idempotence, rollback, behaviour when run by a cron job or a
-  hook with no terminal.
+- **Operability**: install from a clean state (an approved offline run in a
+  scratch copy, or traced by reading), what happens when it fails at 3 a.m.,
+  logs, idempotence, rollback, behaviour when run by a cron job or a hook
+  with no terminal.
 - **Test skeptic**: do the tests test the claim? Break the code on purpose in
   the scratch copy and see whether the tests notice.
 - **Maintainer**: could half of it go? Duplication, naming, hidden coupling;
@@ -144,7 +147,8 @@ Fill these for every lens; they become the reviewer prompt placeholders.
 
 ### Skills, prompts, agents, workflows
 - **Cold-start user**: follows only the files on a realistic, fictional
-  request; where do they stall, guess or need the author's machine?
+  request, by reading (and approved offline runs only); where do they
+  stall, guess or need the author's machine?
 - **Prompt safety**: injection paths (files, pages, tool output the prompt
   reads), side effects without a yes, data leaving the machine, over-broad
   permissions, secrets asked in chat.

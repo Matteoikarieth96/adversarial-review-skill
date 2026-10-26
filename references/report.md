@@ -103,7 +103,9 @@ and whether the panel found it.>
 ## Limits of this review
 <What no lens could check (logins, paid services, real devices, watching or
 listening in real time), the shared model, anything that ran without
-independence (author-designed panel, no Agent tool).>
+independence (author-designed panel, no Agent tool), any change an agent
+made to the shared input. Always end with: a verdict here is a model
+review, not a legal, financial, medical or security sign-off.>
 
 ## Applied
 <Filled after step 7: what was applied, what was skipped, re-check results,

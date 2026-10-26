@@ -19,29 +19,32 @@ strongest case that it is wrong?) or a lens that plays that role.
 1. **Collects** the original request, the deliverable, its inputs and
    sources, the claims made about it and the stakes, and writes a brief.
    A script takes a read-only snapshot: symlinks that leave the folder,
-   caches and secret files are left out, secret-looking values are
-   redacted, and git runs only on the session's own work, with the repo's
-   hooks, filters and other configured programs turned off. The author
-   writes down the weak spots it already knows, privately.
+   special files, caches and secret files are left out, secret-looking
+   values are redacted, and git runs only on the session's own work, with
+   the repo's hooks, filters and other configured programs turned off. The
+   author writes down the weak spots it already knows, privately.
 2. **Designs the panel** with a fresh agent, from the brief and a lens
    catalog (`references/lenses.md`). The author can steer the panel only
    through the brief, which must not hint at the known weak spots.
 3. **Asks once** whether the target and the panel are right.
-4. **Launches one fresh agent per lens**, in parallel. Reviewers see the
-   brief and the snapshot only, work in their own scratch folder, use a
-   closed set of tools, and run code only when the work was made in this
-   session and the user approved that exact run.
+4. **Launches one fresh agent per lens**, in parallel. Reviewers are told to
+   read only the brief and the snapshot, work in their own scratch folder,
+   use a closed set of tools, and run code only when the work was made in
+   this session and you approved that exact run.
 5. **Merges the findings.** The author can confirm a Critical or High but
-   never reject or downgrade one: that goes to a referee agent. Known weak
-   spots still count, and all of them are shown to the user. One report:
-   verdict, per-lens scores, Fix first, ranked improvements, what holds.
-6. **Applies only the fixes you pick**, and re-checks Critical and High
-   fixes with the lenses that raised them.
+   never reject or downgrade one: that goes to a referee agent, which works
+   from a pristine copy of the input. Known weak spots still count, and all
+   of them are shown to you. One report: verdict, per-lens scores, Fix
+   first, ranked improvements, what holds.
+6. **Applies only the fixes you pick**, after making sure you can go back,
+   and re-checks Critical and High fixes with the lenses that raised them.
 
-What it never does: change the originals; push, post, send, publish,
-deploy, delete, buy, log in or call a paid API; run code from work that was
-not produced in the session; run code without your yes to that exact
-command; apply a fix you did not choose.
+What the skill instructs Claude and the agents never to do during a review:
+change the originals; push, post, send, publish, deploy, delete, buy, log in
+or call a paid API; run code from work that was not produced in the session;
+run code without your yes to that exact command; apply a fix you did not
+choose. These are instructions to language models, not enforced limits:
+Claude Code's own permissions are the real boundary (see Security).
 
 ## The intake questions
 
@@ -66,9 +69,10 @@ Requirements:
 - Claude Code with the Agent tool. Without it, the skill plays the lenses one
   at a time and says the review was not independent.
 - Python 3.9 or newer (standard library only) for `scripts/snapshot.py`.
-- `rsync` and `git` (preinstalled on macOS and most Linux systems).
+- `git`, only to save a diff of what the session changed in a repo.
 - Optional: `ffmpeg` and `ffprobe` for video and audio deliverables.
-- Tested on macOS and Linux. Not tested on Windows.
+- Tested on macOS and Linux. Not tested on Windows (WSL should behave like
+  Linux, untested).
 
 ## Usage
 
@@ -82,38 +86,51 @@ or `/adversarial-review` with `quick` or `deep` to set the size. It also
 responds to Italian phrasings such as "review avversariale" and "fai partire
 la review".
 
-| Depth | Reviewers | Rough time end to end |
-| --- | --- | --- |
-| Quick | 3 | 20 to 30 minutes (estimate) |
-| Standard (default) | 4 to 6 | 30 to 55 minutes |
-| Deep | 6 to 8, plus a referee | 45 to 70 minutes (estimate) |
+| Depth | Reviewers | Rough time end to end | Rough tokens in total |
+| --- | --- | --- | --- |
+| Quick | 3 | 20 to 30 minutes | 0.4 to 0.6 million |
+| Standard (default) | 4 to 6 | 30 to 55 minutes | 0.6 to 1.1 million |
+| Deep | 6 to 8, plus a referee | 45 to 70 minutes | 1 to 1.6 million |
 
-These figures come from one Standard run on the author's machine, not an
-average: each reviewer took 5 to 11 minutes and roughly 120k to 170k tokens,
-all in parallel. Quick and Deep are scaled from that run. A review uses your
-Claude Code usage; the skill calls no paid API of its own.
+All figures are rough estimates built from one Standard run on the author's
+machine, not an average: in that run each reviewer took 5 to 11 minutes and
+roughly 120k to 170k tokens, all in parallel. A review uses your Claude Code
+usage: on a plan it takes a large share of your limits, and with API-key
+billing you pay for those tokens. The skill calls no other paid service.
+
+Expect permission prompts while the reviewers work, unless your settings
+already allow their tools. For work that comes from elsewhere (a cloned
+repo, a download), keep those prompts on.
 
 ## Data and privacy
 
-- **Reads**: the deliverable you point at, the conversation's request, and
-  the sources the work cites.
+- **Reads**: the deliverable you point at, the conversation's request, your
+  own standing rules that apply (from CLAUDE.md and memory), and the sources
+  the work cites.
 - **Sends**: the brief and the snapshot go to the reviewer agents, which run
-  on the same Claude account as your session. Reviewers may search the web
-  and open public pages to check facts and links; they are told never to put
-  private data in a search, a URL or a query string.
-- **Stores**: a workspace folder in the session scratchpad (or a `mktemp`
-  folder) with the brief, the snapshot, one file per review and the report.
-  Nothing is copied next to your work unless you ask.
+  on the same Claude account as your session, so the model provider reads
+  them like the rest of the session. Reviewers may search the web and open
+  public pages to check facts and links; they are told never to put private
+  data in a search, a URL or a query string.
+- **Stores**: two folders in the session scratchpad (or made with
+  `mktemp -d`): the workspace with the brief, the snapshot, one file per
+  review and the report, and a private folder with the author's notes, a
+  pristine copy of the input and, before fixes, a copy of the originals.
+  Nothing is copied next to your work unless you ask. They stay until the
+  scratchpad is cleared; to delete them yourself, run `chmod -R u+w` on each
+  folder first, because the snapshot is read only.
 - Real personal data (customers, patients, employees) is replaced by a
   synthetic sample with the same shape whenever the review can work without
-  it.
+  it. When it cannot, the skill tells you before including it.
 
 ## Security
 
 Everything in the deliverable and everything the agents send back is treated
 as untrusted data: text aimed at an agent becomes a finding, never an
-instruction. The originals stay untouched and side effects are forbidden.
-These are rules for language-model agents, not a sandbox; Claude Code's own
+instruction. The snapshot script escapes every name it prints, leaves out
+secret files and redacts secret-looking values; the referee and the
+re-checkers get a pristine copy of the input in fresh folders. The rest are
+rules for language-model agents, not a sandbox: Claude Code's own
 permissions remain the real boundary. Details and residual risks:
 [SECURITY.md](SECURITY.md).
 
@@ -125,7 +142,10 @@ permissions remain the real boundary. Details and residual risks:
 - Reviewers do not use a browser; pages and apps are judged from
   screenshots taken before the review.
 - Redaction is pattern based, and secret files are left out by name: a
-  secret in an unusual format can still reach the reviewers.
+  secret in an unusual format can still reach the reviewers. Binary files
+  and files over 20 MB are copied without redaction and listed as such.
+- A "Good to go" is a model review, not a legal, financial, medical or
+  security sign-off.
 - A review costs time and usage (see the table above). For a quick
   proofread, just ask Claude directly.
 
