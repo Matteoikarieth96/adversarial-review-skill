@@ -490,7 +490,36 @@ class SnapshotTest(unittest.TestCase):
             out = run(self.src, self.dest)
         finally:
             os.chmod(locked, 0o700)
-        self.assertIn("private-dir/ (unreadable)", out)
+        self.assertIn("not copied (FIFOs, sockets, devices, unreadable, or changed while copying): "
+                      "`private-dir/ (unreadable)`", out)
+
+    def test_every_secret_layout_found_in_review_is_masked(self):
+        """Corpus of every layout a review round found; each must lose the value."""
+        pw = "Hunter2" + "Sup3rSecretValue"
+        layouts = [
+            "password: " + pw, "Password : " + pw, "password:\u00a0" + pw, "password:\u3000" + pw,
+            "password=\x0c" + pw, "password:\r" + pw + "\r", "password =\n    " + pw,
+            "password\n= " + pw, 'password =\n"' + pw + '"', "password:\n\n  " + pw,
+            'token = "' + pw + '":', "API_KEY" + " " * 12 + "= " + pw, "password:\n  " + pw,
+            "secrets:\n  db_password: " + pw, "token =\npassword = " + pw,
+            "tokens:\n  github_token: " + pw, 'secrets:\n  "db_password": "' + pw + '"',
+            "DB_PASSWORD=" + pw + ".Winter", "secret: " + pw + "{x}", "password=ab(cd)" + pw,
+            "API_TOKEN=abc<def>" + pw, "password: `" + pw + "`", "DB_PASSWORD=" + pw + "[2024]",
+            "password=this.is." + pw, "API_TOKEN=env." + pw, "DB_PASSWORD=" + pw + "(x)",
+            "password: Spring[" + pw + "]", "api_key=" + pw + "(", "https://u:" + pw + "@h.example/",
+            "secret = '" + pw + "'", 'password = "' + pw + '"',
+        ]
+        for text in layouts:
+            new, n = snapshot.redact_text(text)
+            self.assertNotIn(pw, new, repr(text))
+        for code in ("token = get_token(request)", "password = os.environ.get(",
+                     "secret = os.environ[", "api_key = load_key()", "password = os.getenv(name)",
+                     "secret = environ[key]", "token = get_token()"):
+            self.assertEqual(snapshot.redact_text(code), (code, 0), code)
+
+    def test_code_check_uses_little_memory_on_long_values(self):
+        value = "a." * 200_000 + "get_x(ccc!"
+        self.assertFalse(snapshot.is_code_value(value))
 
     def test_utf32_text_is_redacted(self):
         with open(os.path.join(self.src, "wide32.txt"), "wb") as fh:

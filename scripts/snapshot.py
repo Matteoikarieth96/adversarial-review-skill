@@ -73,23 +73,43 @@ SECRET_PATTERNS = [
 ]
 TOKEN_RUN = re.compile(r"[A-Za-z0-9_.-]{30,}")  # JWTs are found inside these runs
 B64URL = re.compile(r"[A-Za-z0-9_-]{10,}")
+# The suffix is matched once and never retried (lookahead plus backreference,
+# an atomic group that Python 3.9 understands): a separator can only follow
+# the whole word anyway, and retrying made long runs of key words slow.
 KEYS = (r"(?:api[_-]?key|secret|token|passw(?:or)?d|private[_-]?key|access[_-]?key)"
-        r"[A-Za-z0-9_]{0,40}")
-# A value on the same line, or (YAML) on the next line after "key:".
-SEP_LINE = r"[\"']?[ \t]*[:=][ \t]*"
-SEP_NEXT = r"[\"']?[ \t]*:[ \t]*\r?\n[ \t]*"
-NOT_A_KEY = r"(?![\w.-]+:(?:[ \t\r\n]|$))"  # the next line holds another key, not a value
+        r"(?=(?P<sfx>[A-Za-z0-9_]{0,40}))(?P=sfx)")
+# Separators: any spacing but line breaks (NBSP and other Unicode spaces too),
+# at most one line break before ":" or "=", and the value either on the same
+# line or on the next one (a blank line allowed) unless that line is a key.
+WS = r"[^\S\r\n]"
+LB = r"(?:\r\n|\r|\n)"
+PRE = r"[\"']?" + WS + r"*(?:" + LB + WS + r"*)?"
+SEP_LINE = PRE + r"[:=]" + WS + r"*"
+SEP_NEXT = PRE + r"[:=]" + WS + r"*(?:" + LB + WS + r"*){1,2}"
+NOT_A_KEY = r"(?![\"']?[\w.-]+[\"']?" + WS + r"*[:=](?:\s|$))"
 # Value masked in full; the key and the quotes stay.
-ASSIGN_QUOTED = re.compile(r"(?i)(" + KEYS + r"(?:" + SEP_LINE + r"|" + SEP_NEXT + r"))"
-                           r"([\"'])([^\"'\r\n]{8,})\2(?![ \t]*:)")
-ASSIGN_BARE = re.compile(r"(?i)(" + KEYS + r"(?:" + SEP_LINE + r"|" + SEP_NEXT + NOT_A_KEY + r"))"
-                         r"([^\s\"',;]{8,})")
+ASSIGN_QUOTED_LINE = re.compile(r"(?i)(?P<key>" + KEYS + SEP_LINE + r")(?P<q>[\"'])(?P<val>[^\"'\r\n]{8,})(?P=q)")
+ASSIGN_QUOTED_NEXT = re.compile(r"(?i)(?P<key>" + KEYS + SEP_NEXT + NOT_A_KEY + r")(?P<q>[\"'])"
+                                r"(?P<val>[^\"'\r\n]{8,})(?P=q)(?!" + WS + r"*:)")
+ASSIGN_BARE = re.compile(r"(?i)(?P<key>" + KEYS + r"(?:" + SEP_LINE + r"|" + SEP_NEXT + NOT_A_KEY + r"))"
+                         r"(?P<val>[^\s\"',;]{8,})")
 URL_CREDENTIALS = re.compile(r"(?i)(\b[a-z][a-z0-9+.-]{0,20}://[^\s:/@]+:)([^\s@/]+)(@)")
 # Bare values that are code, not literals: a known accessor (getenv, environ,
 # get_*, load_*...) called or indexed with a name or nothing. Anything else is
-# masked (masking too much beats leaking).
-CODE_VALUE = re.compile(r"(?:[A-Za-z_]\w*\.)*(?:getenv|environ(?:\.get)?|get|get_\w+|load_\w+|read_\w+"
-                        r"|fetch_\w+)[(\[](?:[A-Za-z_][\w.]*)?[)\]]?")
+# masked (masking too much beats leaking). One flat pattern, then a name check,
+# so a hostile value cannot make the regex engine keep per-dot state.
+CODE_SHAPE = re.compile(r"[A-Za-z_][\w.]*[(\[](?:[A-Za-z_][\w.]*)?[)\]]?")
+ACCESSORS = {"getenv", "get", "environ"}
+ACCESSOR_PREFIXES = ("get_", "load_", "read_", "fetch_")
+
+
+def is_code_value(value):
+    if not CODE_SHAPE.fullmatch(value):
+        return False
+    name = re.split(r"[(\[]", value, maxsplit=1)[0]
+    last = name.rsplit(".", 1)[-1]
+    return last in ACCESSORS or name.endswith("environ.get") or last.startswith(ACCESSOR_PREFIXES)
+
 
 MAX_COPY_BYTES = 50_000_000   # bigger files are not copied
 MAX_SCAN_BYTES = 20_000_000   # bigger files are copied but not redacted (listed)
@@ -184,25 +204,26 @@ def redact_text(text):
 
     def sub_quoted(m):
         nonlocal count
-        if m.group(3).startswith("REDACTED("):
+        if m.group("val").startswith("REDACTED("):
             return m.group(0)
         count += 1
-        return m.group(1) + m.group(2) + "REDACTED" + m.group(2)
+        return m.group("key") + m.group("q") + "REDACTED" + m.group("q")
 
     def sub_bare(m):
         nonlocal count
-        value = m.group(2)
-        if value.startswith("REDACTED(") or CODE_VALUE.fullmatch(value):
+        value = m.group("val")
+        if value.startswith("REDACTED(") or is_code_value(value):
             return m.group(0)
         count += 1
-        return m.group(1) + "REDACTED"
+        return m.group("key") + "REDACTED"
 
     def sub_url(m):
         nonlocal count
         count += 1
         return m.group(1) + "REDACTED" + m.group(3)
 
-    text = ASSIGN_QUOTED.sub(sub_quoted, text)
+    text = ASSIGN_QUOTED_LINE.sub(sub_quoted, text)
+    text = ASSIGN_QUOTED_NEXT.sub(sub_quoted, text)
     text = ASSIGN_BARE.sub(sub_bare, text)
     text = URL_CREDENTIALS.sub(sub_url, text)
     return text, count
@@ -320,8 +341,8 @@ def copy_tree(src, dest, res):
     os.fwalk opens every folder relative to its parent without following
     links, so swapping a folder for a link while the copy runs cannot lead
     outside src."""
-    def unreadable(err):
-        res.special.append(os.path.relpath(err.filename or "?", src) + "/ (unreadable)")
+    def unreadable(err):  # fallback: fwalk gives only the bare name here
+        res.special.append(os.path.basename(str(err.filename or "?")) + "/ (unreadable)")
 
     for dirpath, dirnames, filenames, dirfd in os.fwalk(src, follow_symlinks=False, onerror=unreadable):
         rel_dir = os.path.relpath(dirpath, src)
@@ -336,6 +357,13 @@ def copy_tree(src, dest, res):
             elif d.lower() in SECRET_DIRS:
                 res.secrets.append(rel + "/")
             else:
+                try:
+                    os.close(os.open(d, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | NOFOLLOW,
+                                     dir_fd=dirfd))
+                    os.listdir(os.path.join(dirpath, d))
+                except OSError:
+                    res.special.append(rel + "/ (unreadable)")
+                    continue
                 os.mkdir(os.path.join(out_dir, d), 0o700)
                 keep.append(d)
         dirnames[:] = keep

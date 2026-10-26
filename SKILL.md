@@ -132,7 +132,9 @@ fresh folder instead.
 `mktemp -d "<the folder that holds $WS>/private.XXXXXX"` (a plain
 `mktemp -d` can land outside the scratchpad). Its path is never given to any
 agent, but agents could still find it: it keeps things out of their prompts,
-it is not a lock. Your known items, the panel notes and a pristine copy of
+it is not a lock. Write records there only as new files (check
+`test ! -e <path> && test ! -L <path>` first; if the path exists, pick
+another name). Your known items, the panel notes and a pristine copy of
 the input live there.
 
 **Snapshot.** Every reviewer sees the same version, and the originals stay
@@ -164,8 +166,9 @@ manifest under Deliverable in the brief, inside a fenced block headed
 the manifest into a shell command: open target files with the file-reading
 tool. Several deliverables: run it once for each, with the same target
 folder; each lands in `target/<its name>`. If the script fails or is
-stopped, it removes its partial copy: make sure no partial copy is left in
-the target, tell the user, and do not hand anything to the agents.
+stopped (it removes its own partial copy when it can), start again in a
+fresh `$WS`, tell the user, and hand nothing from the old one to the
+agents.
 
 The script does not cover the items below. Save them by hand into
 `$PRIVATE/handmade/`, never straight into the target (that would skip the
@@ -312,8 +315,10 @@ If the answer changes the brief (concerns, lenses), change it in the
 pristine copy, which every agent's copy comes from from now on: check the
 pristine copy against your fingerprint (different: stop and tell the user),
 then `chmod u+w "$PRIVATE/input-pristine/brief.md"`, edit it, `chmod a-w` it
-again, and keep its new fingerprint instead of the old one. `$WS/input` stays
-as the designer saw it.
+again, and fingerprint it. From then on keep two values: the step 1 value
+(what `$WS/input` must still match) and the new pristine value. `$WS/input`
+stays as the designer saw it; a designer relaunched for an added lens gets a
+fresh `mktemp -d` copy of the pristine input instead.
 
 ## Step 4. Launch the panel
 
@@ -327,9 +332,13 @@ made (`test ! -L "$WS"`).
 Then give every reviewer its own fresh folder and its own copy:
 
 ```bash
-L=$(mktemp -d "$WS/lens-<slug>.XXXXXX")
+L=$(mktemp -d "$WS/lens-<slug>.XXXXXX") && echo "$L"
 cp -R "$PRIVATE/input-pristine" "$L/input" && mkdir -p "$L/scratch/home" "$L/scratch/tmp"
 ```
+
+Put the printed path in the prompt; never find these folders by listing or
+globbing `$WS`, where an agent could have planted look-alikes. The same goes
+for `$R` and `$V` below.
 
 Fingerprint each `$L/input`: it must match your value. A reviewer then
 cannot change what another reviewer, the referee or a re-checker reads,
@@ -383,7 +392,7 @@ for labels, the verdict rules and the report template. In order:
    input:
 
    ```bash
-   R=$(mktemp -d "$WS/referee.XXXXXX")
+   R=$(mktemp -d "$WS/referee.XXXXXX") && echo "$R"
    cp -R "$PRIVATE/input-pristine" "$R/input" && mkdir -p "$R/scratch/home" "$R/scratch/tmp"
    ```
 
@@ -403,8 +412,10 @@ for labels, the verdict rules and the report template. In order:
 7. **Verdict**, per references/report.md. Show each lens's own score, with
    "after referee" notes; never average them, because an average hides the
    lens that failed.
-8. Write `$WS/report.md` from the template, with the number of agents and
-   the real duration in the header.
+8. Check the skill's `shasum` list once more: a change means an agent
+   edited the installed skill; name the file to the user and say it should
+   be restored from its source. Then write `$WS/report.md` from the
+   template, with the number of agents and the real duration in the header.
 
 ## Step 6. Report and choose
 
@@ -430,11 +441,9 @@ question.
 ## Step 7. Apply and re-check
 
 1. Before the first fix, make sure the user can go back: copy the
-   originals with
-   `mkdir -p "$PRIVATE/originals/1" && cp -RH '<deliverable>' "$PRIVATE/originals/1/"`
-   (one numbered folder per deliverable, so two with the same name do not
-   overwrite each other)
-   (`-H` copies the real folder when the deliverable path is a link) and
+   originals into a fresh folder, one per deliverable,
+   `O=$(mktemp -d "$PRIVATE/originals.XXXXXX") && echo "$O" && cp -RH '<deliverable>' "$O/"`
+   (`-H` copies the real folder when the deliverable path is a link), and
    keep the `--fingerprint` of the copy in your notes (the redacted snapshot
    is not a backup). Do not run `git commit` or `git stash` yourself: they
    run the repo's own hooks and filters. The user can commit first if they
@@ -444,32 +453,42 @@ question.
    run or a credential, or touches files outside the deliverable, is shown
    to the user as the exact change and needs its own yes.
 3. Check each fix the way its finding was proved, within "Running code".
-4. **Re-check**, at any depth, when a Critical or High was fixed, in a fresh
-   folder with a random name. Check the script's `shasum` and the pristine
-   copy's fingerprint first (different: stop and tell the user), and
-   fingerprint `$V/before` after the copy (it must match too).
+4. **Re-check**, at any depth, when a Critical or High was fixed. Check the
+   skill's `shasum` list and the pristine copy's fingerprint first
+   (different: stop and tell the user). Snapshot the new version once into
+   a fresh private folder and fingerprint it:
 
    ```bash
-   V=$(mktemp -d "$WS/recheck.XXXXXX")
-   cp -R "$PRIVATE/input-pristine" "$V/before"
-   python3 -I -S "$SKILL/scripts/snapshot.py" '<deliverable>' "$V/target"
+   N=$(mktemp -d "$PRIVATE/after.XXXXXX") && echo "$N"
+   python3 -I -S "$SKILL/scripts/snapshot.py" '<deliverable>' "$N/target"
+   python3 -I -S "$SKILL/scripts/snapshot.py" --fingerprint "$N/target"
+   ```
+
+   Then give each re-checker its own fresh folder:
+
+   ```bash
+   V=$(mktemp -d "$WS/recheck-<slug>.XXXXXX") && echo "$V"
+   cp -R "$PRIVATE/input-pristine" "$V/before" && cp -R "$N/target" "$V/target"
    diff -ruN "$V/before/target" "$V/target" > "$V/fix.diff"
    ```
 
-   Write each re-checked lens's review to `$V/<slug>-review.md` from the
-   text it returned to you (your context, not a file), create
-   `$V/scratch/<slug>/` with `home/` and `tmp/` for each re-checker, and
-   only then make the inputs read only:
+   Fingerprint `$V/before` and `$V/target` (they must match your values),
+   write the lens's review to `$V/<slug>-review.md` from the text it
+   returned to you (your context, not a file), create `$V/scratch/<slug>/`
+   with `home/` and `tmp/`, and only then make the inputs read only:
    `chmod -R a-w "$V/before" "$V/target" "$V/fix.diff" "$V"/*-review.md`.
    Launch one agent per lens that raised a fixed Critical or High (at most
    3) with [agents/rechecker.md](agents/rechecker.md); when the fixes
-   rewrote a large part of the deliverable, add Goal fit.
+   rewrote a large part of the deliverable, add Goal fit. When they return,
+   fingerprint each `$V/before` and `$V/target` again: a difference is a
+   finding against that re-check.
 5. Recompute the verdict as "Verdict after fixes" with the rules in
    references/report.md, update the report (Applied section, duration,
    number of agents) and tell the user. A "Not fixed", "Partly fixed" or
    regression goes back to the user with the item. Copy the report next to
    the work only if the user asks.
-6. Tell the user where `$WS` and `$PRIVATE` are, and that they can delete
+6. Check the skill's `shasum` list a last time (as in step 5, item 8).
+   Tell the user where `$WS` and `$PRIVATE` are, and that they can delete
    them after `chmod -R u+w` (the snapshot is read only). Do not delete them
    yourself unless the user asks. When step 6 applied nothing, say this
    there.

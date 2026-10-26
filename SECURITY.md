@@ -75,8 +75,10 @@ Tests for these cases: `tests/test_snapshot.py`.
   limited to work produced in the session.
 - Redaction is pattern based and secret files are left out by name. A secret
   in an unusual format, or inside a binary file or a file over 20 MB (both
-  listed in the manifest), can reach the reviewers. Redaction also errs the
-  other way: code such as `token = self.token` can show as `REDACTED`.
+  listed in the manifest), can reach the reviewers, and so can a secret used
+  as a YAML key (`api_keys:` then `<token>: frontend` on the next line).
+  Redaction also errs the other way: code such as `token = self.token` can
+  show as `REDACTED`.
 - The snapshot goes to the same model provider as the rest of the session.
   Real personal data should be replaced by a synthetic sample, as the skill
   asks.

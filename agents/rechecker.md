@@ -9,7 +9,7 @@ line as the agent prompt.
 | Placeholder | Value |
 | --- | --- |
 | `{{LENS}}`, `{{PERSONA}}`, `{{QUESTION}}`, `{{RUNS_CODE}}` | from that lens's spec |
-| `{{BRIEF}}` | `$V/before/brief.md` (`$V` is the fresh `mktemp -d` folder from SKILL.md step 7) |
+| `{{BRIEF}}` | `$V/before/brief.md` (`$V` is this re-checker's own fresh `mktemp -d` folder from SKILL.md step 7, as printed) |
 | `{{OLD_TARGET}}` | `$V/before/target/` |
 | `{{NEW_TARGET}}` | `$V/target/` |
 | `{{DIFF}}` | `$V/fix.diff` |
