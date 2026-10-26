@@ -466,7 +466,7 @@ class SnapshotTest(unittest.TestCase):
 
     def test_utf16_with_nul_characters_is_still_redacted(self):
         data = ("\0api_key = " + FAKE_KEY + "\n").encode("utf-16")
-        new, n, why = snapshot.redact_bytes(data)
+        new, n, why, _cross = snapshot.redact_bytes(data)
         self.assertGreaterEqual(n, 1)
         self.assertNotIn(FAKE_KEY, new.decode("utf-16"))
 
@@ -502,6 +502,10 @@ class SnapshotTest(unittest.TestCase):
 'password =\n"' + pw + '"', "password:\n\n  " + pw,
             "secret:\n  " + pw + "=", 'password:\n  "pass: ' + pw + '"', "token:\n  " + pw + "==",
             "fernet_secret_key:\n    " + pw + "a2V5X2Zvcl90ZXN0aW5nX29ubHk=", 'password = "' + pw + '"\u00a0:',
+            "db:\n  password:\n    " + pw + "(!", "password:\n    s3cr3t[" + pw,
+            "sas_token:\n    sv=2022-11-02&ss=b&sig=" + pw + "%3D", "password:\n  pa=" + pw,
+            "api_key:\n  " + pw + ",", "password\n  = " + pw, '{"password"\n  : "' + pw + '"}',
+            "password\n= " + pw,
             'token = "' + pw + '":', "API_KEY" + " " * 12 + "= " + pw, "password:\n  " + pw,
             "secrets:\n  db_password: " + pw, "token =\npassword = " + pw,
             "tokens:\n  github_token: " + pw, 'secrets:\n  "db_password": "' + pw + '"',
@@ -519,16 +523,16 @@ class SnapshotTest(unittest.TestCase):
                      "secret = environ[key]", "token = get_token()"):
             self.assertEqual(snapshot.redact_text(code), (code, 0), code)
 
-    def test_calls_on_the_next_line_are_not_masked(self):
-        # masking these would hide what the code does from a security reviewer
-        for code in ("const token =\n  require('child_process').execSync(cmd)",
-                     "secret_handler\n= __import__('os').system(x)",
-                     "token = a..get_(Hunter2Sup3r)"):
-            new, n = snapshot.redact_text(code)
-            if "a..get_" in code:
-                self.assertNotIn("Hunter2Sup3r", new)
-            else:
-                self.assertIn("child_process" if "child" in code else "__import__", new)
+    def test_masks_across_a_line_break_are_marked_and_listed(self):
+        # in code such a mask can hide a whole line, so it must be visible
+        code = "export API_TOKEN=\n./payload.sh --now\n"
+        new, n = snapshot.redact_text(code)
+        self.assertIn("REDACTED(line-break)", new)
+        write(os.path.join(self.src, "deploy.sh"), code)
+        out = run(self.src, self.dest)
+        self.assertIn("`deploy.sh` (1)", out.split("values masked across a line break")[1].splitlines()[0])
+        new, n = snapshot.redact_text("token = a..get_(Hunter2Sup3r)")
+        self.assertNotIn("Hunter2Sup3r", new)
 
     def test_code_check_uses_little_memory_on_long_values(self):
         value = "a." * 200_000 + "get_x(ccc!"

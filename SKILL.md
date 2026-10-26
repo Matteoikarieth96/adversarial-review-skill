@@ -135,7 +135,8 @@ agent, but agents could still find it: it keeps things out of their prompts,
 it is not a lock. Create it, and `$PRIVATE/returned/`, before any agent runs,
 note its real path (`cd "$PRIVATE" && pwd -P`), and before every later write
 or `mktemp` in it check `test ! -L "$PRIVATE"` and that real path. Write
-records only as new files (`test ! -e <path> && test ! -L <path>` first). Your known items, the panel notes and a pristine copy of
+records only as new files (`test ! -e <path> && test ! -L <path>` first; if
+the path exists, pick another name). Your known items, the panel notes and a pristine copy of
 the input live there.
 
 **Snapshot.** Every reviewer sees the same version, and the originals stay
@@ -318,8 +319,8 @@ pristine copy against your fingerprint (different: stop and tell the user),
 then `chmod u+w "$PRIVATE/input-pristine/brief.md"`, edit it, `chmod a-w` it
 again, and fingerprint it. From then on keep two values: the step 1 value
 (what `$WS/input` must still match) and the new pristine value. `$WS/input`
-stays as the designer saw it; a designer relaunched for an added lens gets a
-fresh copy instead, checked like the reviewers' copies in step 4:
+stays as the designer saw it. Every relaunched designer (here or in step 2)
+gets a fresh copy instead, checked like the reviewers' copies in step 4:
 `D=$(mktemp -d "$WS/designer.XXXXXX") && echo "$D" && cp -R "$PRIVATE/input-pristine" "$D/input"`.
 
 ## Step 4. Launch the panel

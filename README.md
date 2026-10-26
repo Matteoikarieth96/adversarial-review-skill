@@ -143,7 +143,9 @@ permissions remain the real boundary. Details and residual risks:
   screenshots taken before the review.
 - Redaction is pattern based, and secret files are left out by name: a
   secret in an unusual format can still reach the reviewers. Binary files
-  and files over 20 MB are copied without redaction and listed as such.
+  and files over 20 MB are copied without redaction and listed as such. It
+  also masks some code: a value masked on the line after its key shows as
+  `REDACTED(line-break)` and is listed, because in code it can hide a line.
 - A "Good to go" is a model review, not a legal, financial, medical or
   security sign-off.
 - A review costs time and usage (see the table above). For a quick

@@ -78,16 +78,20 @@ B64URL = re.compile(r"[A-Za-z0-9_-]{10,}")
 # the whole word anyway, and retrying made long runs of key words slow.
 KEYS = (r"(?:api[_-]?key|secret|token|passw(?:or)?d|private[_-]?key|access[_-]?key)"
         r"(?=(?P<sfx>[A-Za-z0-9_]{0,40}))(?P=sfx)")
-# Separators: any spacing but line breaks (NBSP and other Unicode spaces too).
-# The value is on the same line, or on the next line (a blank line allowed)
-# when that line is not itself a key. A next-line bare value holds no brackets,
-# so a call written on the next line is never masked (that could hide code).
+# Separators: any spacing but line breaks (NBSP and other Unicode spaces too),
+# one optional line break before ":" or "=", and the value on the same line or
+# on the next one (a blank line allowed) when that line is not itself a key.
+# A value masked across a line break becomes REDACTED(line-break) and is listed
+# in the manifest: in code it can hide a whole line, so reviewers must see it.
 WS = r"[^\S\r\n]"
 LB = r"(?:\r\n|\r|\n)"
-SEP_LINE = r"[\"']?" + WS + r"*[:=]" + WS + r"*"
-SEP_NEXT = r"[\"']?" + WS + r"*[:=]" + WS + r"*(?:" + LB + WS + r"*){1,2}"
-# "key: ..." or "key=value" or "key = value"; a base64 value ending in "=" is not a key.
-NOT_A_KEY = r"(?![\"']?[\w.-]+[\"']?" + WS + r"*(?::(?:\s|$)|=" + WS + r"*[^\s=]))"
+PRE = r"[\"']?" + WS + r"*(?:" + LB + WS + r"*)?"
+SEP_LINE = PRE + r"[:=]" + WS + r"*"
+SEP_NEXT = PRE + r"[:=]" + WS + r"*(?:" + LB + WS + r"*){1,2}"
+# The next line is a key for "key: ..." or "key = ..." (spaced). "key=value"
+# with no spaces is taken as the value and masked whole, which masks a secret
+# either way; a base64 value ending in "=" is a value.
+NOT_A_KEY = (r"(?![\"']?[\w.-]+[\"']?(?:" + WS + r"*:(?:\s|$)|" + WS + r"+=|=" + WS + r"+))")
 NOT_A_QKEY = r"(?![\"'][\w.-]+[\"']" + WS + r"*[:=])"
 # Value masked in full; the key and the quotes stay. The same-line passes run
 # first, so a next-line pass that masks a quoted key masks nothing secret.
@@ -95,8 +99,8 @@ ASSIGN_QUOTED_LINE = re.compile(r"(?i)(?P<key>" + KEYS + SEP_LINE + r")(?P<q>[\"
 ASSIGN_QUOTED_NEXT = re.compile(r"(?i)(?P<key>" + KEYS + SEP_NEXT + NOT_A_QKEY + r")(?P<q>[\"'])"
                                 r"(?P<val>[^\"'\r\n]{8,})(?P=q)")
 ASSIGN_BARE = re.compile(r"(?i)(?P<key>" + KEYS + SEP_LINE + r")(?P<val>[^\s\"',;]{8,})")
-ASSIGN_BARE_NEXT = re.compile(r"(?i)(?P<key>" + KEYS + SEP_NEXT + NOT_A_KEY + r")"
-                              r"(?P<val>[^\s\"',;()\[\]{}]{8,})(?!\S)")
+ASSIGN_BARE_NEXT = re.compile(r"(?i)(?P<key>" + KEYS + SEP_NEXT + NOT_A_KEY + r")(?P<val>[^\s\"',;]{8,})")
+CROSS_LINE = "REDACTED(line-break)"
 URL_CREDENTIALS = re.compile(r"(?i)(\b[a-z][a-z0-9+.-]{0,20}://[^\s:/@]+:)([^\s@/]+)(@)")
 # Bare values that are code, not literals: a known accessor (getenv, environ,
 # get_*, load_*...) called or indexed with a name or nothing. Anything else is
@@ -111,7 +115,7 @@ IDENT = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 
 
 def is_code_value(value):
-    if not CODE_SHAPE.fullmatch(value):
+    if len(value) > 200 or not CODE_SHAPE.fullmatch(value):  # accessor calls are short
         return False
     name = re.split(r"[(\[]", value, maxsplit=1)[0]
     parts = name.split(".")
@@ -219,7 +223,8 @@ def redact_text(text):
         if m.group("val").startswith("REDACTED("):
             return m.group(0)
         count += 1
-        return m.group("key") + m.group("q") + "REDACTED" + m.group("q")
+        mark = CROSS_LINE if any(c in m.group("key") for c in "\r\n") else "REDACTED"
+        return m.group("key") + m.group("q") + mark + m.group("q")
 
     def sub_bare(m):
         nonlocal count
@@ -227,7 +232,7 @@ def redact_text(text):
         if value.startswith("REDACTED(") or is_code_value(value):
             return m.group(0)
         count += 1
-        return m.group("key") + "REDACTED"
+        return m.group("key") + (CROSS_LINE if any(c in m.group("key") for c in "\r\n") else "REDACTED")
 
     def sub_url(m):
         nonlocal count
@@ -243,11 +248,12 @@ def redact_text(text):
 
 
 def redact_bytes(data):
-    """(new_data, redactions, reason_not_scanned or None). Bytes that are not
+    """(new_data, redactions, reason_not_scanned or None, masks across a line
+    break). Bytes that are not
     UTF-8 survive unchanged; UTF-16 and UTF-32 are recognised by their byte
     order mark and redacted even when they contain NUL characters."""
     if len(data) > MAX_SCAN_BYTES:
-        return data, 0, "over the scan limit"
+        return data, 0, "over the scan limit", 0
     encodings = []
     if data.startswith((b"\xff\xfe\x00\x00", b"\x00\x00\xfe\xff")):
         encodings.append("utf-32")
@@ -261,17 +267,18 @@ def redact_bytes(data):
         except UnicodeDecodeError:
             continue
     if encodings and enc is None:
-        return data, 0, "binary"
+        return data, 0, "binary", 0
     if enc is None:
         if b"\0" in data[:8192]:
-            return data, 0, "binary"
+            return data, 0, "binary", 0
         text, enc = data.decode("utf-8", errors="surrogateescape"), "utf-8"
     new, n = redact_text(text)
     if not n:
-        return data, 0, None
+        return data, 0, None, 0
+    cross = new.count(CROSS_LINE) - text.count(CROSS_LINE)
     if enc in ("utf-16", "utf-32"):
-        return new.encode(enc), n, None
-    return new.encode("utf-8", errors="surrogateescape"), n, None
+        return new.encode(enc), n, None, cross
+    return new.encode("utf-8", errors="surrogateescape"), n, None, cross
 
 
 class Result:
@@ -283,6 +290,7 @@ class Result:
         self.too_big = []        # over MAX_COPY_BYTES: not copied
         self.redacted = []       # (relpath, n)
         self.not_scanned = []    # (relpath, reason): copied but not redacted
+        self.cross_line = []     # (relpath, n): values masked across a line break
 
 
 def inside(path, root):
@@ -316,10 +324,12 @@ def copy_data(data, out, rel, res):
     if len(data) > MAX_COPY_BYTES:
         res.too_big.append(rel)
         return
-    new, n, why = redact_bytes(data)
+    new, n, why, cross = redact_bytes(data)
     write_new(out, new)
     if n:
         res.redacted.append((rel, n))
+    if cross:
+        res.cross_line.append((rel, cross))
     if why:
         res.not_scanned.append((rel, why))
 
@@ -363,7 +373,12 @@ def copy_tree(src, dest, res):
         keep, entries = [], list(filenames)
         for d in sorted(dirnames):
             rel = os.path.normpath(os.path.join(rel_dir, d))
-            if stat.S_ISLNK(os.stat(d, dir_fd=dirfd, follow_symlinks=False).st_mode):
+            try:
+                is_link = stat.S_ISLNK(os.stat(d, dir_fd=dirfd, follow_symlinks=False).st_mode)
+            except PermissionError:
+                res.special.append(rel + "/ (unreadable)")
+                continue
+            if is_link:
                 entries.append(d)  # a link to a folder is handled as a link
             elif d.lower() in CACHE_DIRS:
                 continue
@@ -632,6 +647,9 @@ def manifest(src, copy, res):
     lines.append("- files over %d MB not copied: %s" % (MAX_COPY_BYTES // 1_000_000, q_list(res.too_big)))
     lines.append("- secret-looking values redacted: %s" % q_list(
         res.redacted, lambda r: "%s (%d)" % (q(r[0]), r[1])))
+    lines.append("- values masked across a line break, shown as %s (in code this can hide a whole "
+                 "line; read those lines with care): %s" % (CROSS_LINE, q_list(
+                     res.cross_line, lambda r: "%s (%d)" % (q(r[0]), r[1]))))
     lines.append("- copied but not scanned for secrets: %s" % q_list(
         res.not_scanned, lambda r: "%s (%s)" % (q(r[0]), r[1])))
     files = []
