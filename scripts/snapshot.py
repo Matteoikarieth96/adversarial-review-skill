@@ -69,26 +69,25 @@ SECRET_PATTERNS = [
     re.compile(r"\bnpm_[A-Za-z0-9]{36}\b"),
     re.compile(r"\bglpat-[A-Za-z0-9_-]{20,}"),
     re.compile(r"https://hooks\.slack\.com/services/[A-Za-z0-9/_-]+"),
-    re.compile(r"(?i)\bbearer[ \t]{1,10}[A-Za-z0-9._~+/-]{16,}=*"),
+    re.compile(r"(?i)\bbearer\s+[A-Za-z0-9._~+/-]{16,}=*"),
 ]
 TOKEN_RUN = re.compile(r"[A-Za-z0-9_.-]{30,}")  # JWTs are found inside these runs
 B64URL = re.compile(r"[A-Za-z0-9_-]{10,}")
 KEYS = (r"(?:api[_-]?key|secret|token|passw(?:or)?d|private[_-]?key|access[_-]?key)"
         r"[A-Za-z0-9_]{0,40}")
-SEP = r"[\"']?[ \t]{0,10}[:=][ \t]{0,10}"
+SEP = r"[\"']?\s*[:=]\s*"
 # Value masked in full; the key and the quotes stay.
-ASSIGN_QUOTED = re.compile(r"(?i)(" + KEYS + SEP + r")([\"'])([^\"'\r\n]{8,2000})\2")
+ASSIGN_QUOTED = re.compile(r"(?i)(" + KEYS + SEP + r")([\"'])([^\"'\r\n]{8,})\2")
 ASSIGN_BARE = re.compile(r"(?i)(" + KEYS + SEP + r")([^\s\"',;]{8,})")
-URL_CREDENTIALS = re.compile(r"(?i)(\b[a-z][a-z0-9+.-]{0,20}://[^\s:/@]{1,200}:)([^\s@/]{1,200})(@)")
-# Bare values that are code, not literals: a call or subscript, or a known object.
-CODE_VALUE = re.compile(r"[A-Za-z_][\w.]*[(\[][\w.]*[)\]]?")
-CODE_PREFIX = re.compile(r"(?:self|this|os|process|config|settings|cfg|conf|env|args|opts|options"
-                         r"|request|req|params|props|ctx|context)\.[A-Za-z_]")
+URL_CREDENTIALS = re.compile(r"(?i)(\b[a-z][a-z0-9+.-]{0,20}://[^\s:/@]+:)([^\s@/]+)(@)")
+# Bare values that are code, not literals: a call or a subscript whose argument
+# is empty or a name. Anything else is masked (masking too much beats leaking).
+CODE_VALUE = re.compile(r"[A-Za-z_][\w.]*[(\[](?:[A-Za-z_][\w.]*)?[)\]]?")
 
 MAX_COPY_BYTES = 50_000_000   # bigger files are not copied
 MAX_SCAN_BYTES = 20_000_000   # bigger files are copied but not redacted (listed)
 MAX_LISTED = 20
-INVISIBLE = {0x115F, 0x1160, 0x3164, 0xFFA0}  # fillers that render as nothing
+INVISIBLE = {0x034F, 0x115F, 0x1160, 0x17B4, 0x17B5, 0x2800, 0x3164, 0xFFA0}  # render as nothing
 NOFOLLOW = getattr(os, "O_NOFOLLOW", 0)
 NONBLOCK = getattr(os, "O_NONBLOCK", 0)
 
@@ -107,8 +106,8 @@ def q(text, limit=200):
         if ch in "`\\$\"'":
             out.append("\\x%02x" % o)
         elif (o < 0x20 or o == 0x7f or o in INVISIBLE or 0xFE00 <= o <= 0xFE0F
-              or 0xE0100 <= o <= 0xE01EF or unicodedata.category(ch) in (
-                  "Cc", "Cf", "Cs", "Co", "Cn", "Zl", "Zp")):
+              or 0xE0100 <= o <= 0xE01EF or (ch != " " and unicodedata.category(ch) in (
+                  "Cc", "Cf", "Cs", "Co", "Cn", "Zl", "Zp", "Zs"))):
             out.append("\\u%04x" % o if o > 0xff else "\\x%02x" % o)
         else:
             out.append(ch)
@@ -186,7 +185,7 @@ def redact_text(text):
     def sub_bare(m):
         nonlocal count
         value = m.group(2)
-        if value.startswith("REDACTED(") or CODE_VALUE.fullmatch(value) or CODE_PREFIX.match(value):
+        if value.startswith("REDACTED(") or CODE_VALUE.fullmatch(value):
             return m.group(0)
         count += 1
         return m.group(1) + "REDACTED"
@@ -207,10 +206,18 @@ def redact_bytes(data):
     UTF-8 survive unchanged; UTF-16 is recognised by its byte order mark."""
     if len(data) > MAX_SCAN_BYTES:
         return data, 0, "over the scan limit"
-    if data.startswith((b"\xff\xfe", b"\xfe\xff")):
+    if data.startswith((b"\xff\xfe\x00\x00", b"\x00\x00\xfe\xff")):
+        enc = "utf-32"
+    elif data.startswith((b"\xff\xfe", b"\xfe\xff")):
+        enc = "utf-16"
+    else:
+        enc = None
+    if enc:
         try:
-            text, enc = data.decode("utf-16"), "utf-16"
+            text = data.decode(enc)
         except UnicodeDecodeError:
+            return data, 0, "binary"
+        if "\0" in text:
             return data, 0, "binary"
     elif b"\0" in data[:8192]:
         return data, 0, "binary"
@@ -219,8 +226,8 @@ def redact_bytes(data):
     new, n = redact_text(text)
     if not n:
         return data, 0, None
-    if enc == "utf-16":
-        return new.encode("utf-16"), n, None
+    if enc in ("utf-16", "utf-32"):
+        return new.encode(enc), n, None
     return new.encode("utf-8", errors="surrogateescape"), n, None
 
 
@@ -334,15 +341,42 @@ def copy_tree(src, dest, res):
             res.links_skipped.append((rel, target))
 
 
+class FingerprintError(Exception):
+    """The tree cannot be fingerprinted reliably."""
+
+
+def _hash_file(name, dir_fd=None):
+    try:
+        fd = os.open(name, os.O_RDONLY | NOFOLLOW | NONBLOCK, dir_fd=dir_fd)
+    except OSError as e:
+        raise FingerprintError("cannot read %s (%s)" % (q(name), e.strerror))
+    h = hashlib.sha256()
+    with os.fdopen(fd, "rb") as fh:
+        if not stat.S_ISREG(os.fstat(fh.fileno()).st_mode):
+            raise FingerprintError("not a regular file: %s" % q(name))
+        for chunk in iter(lambda: fh.read(1 << 20), b""):
+            h.update(chunk)
+    return h.digest()
+
+
 def fingerprint(root):
     """One SHA-256 over every path, type, file content and link target under
-    root, in a fixed order, without following links."""
+    root, in a fixed order, without following links. Raises FingerprintError
+    when root is a link or anything inside cannot be read."""
+    st = os.lstat(root)
+    if stat.S_ISLNK(st.st_mode):
+        raise FingerprintError("the path is a link; fingerprint its real path")
     h = hashlib.sha256()
-    if not os.path.isdir(root) or os.path.islink(root):
-        data = read_regular(root)
-        h.update(b"F" + hashlib.sha256(data or b"").digest())
+    if stat.S_ISREG(st.st_mode):
+        h.update(b"F" + _hash_file(root))
         return h.hexdigest()
-    for dirpath, dirnames, filenames, dirfd in os.fwalk(root, follow_symlinks=False):
+    if not stat.S_ISDIR(st.st_mode):
+        raise FingerprintError("not a file or a folder")
+
+    def fail(err):
+        raise FingerprintError("cannot list %s (%s)" % (q(err.filename or "?"), err.strerror))
+
+    for dirpath, dirnames, filenames, dirfd in os.fwalk(root, follow_symlinks=False, onerror=fail):
         dirnames.sort()
         rel_dir = os.path.relpath(dirpath, root)
         for name in sorted(dirnames + filenames):
@@ -353,12 +387,7 @@ def fingerprint(root):
             elif stat.S_ISDIR(st.st_mode):
                 h.update(b"D" + rel + b"\0")
             elif stat.S_ISREG(st.st_mode):
-                fd = os.open(name, os.O_RDONLY | NOFOLLOW, dir_fd=dirfd)
-                fh_hash = hashlib.sha256()
-                with os.fdopen(fd, "rb") as fh:
-                    for chunk in iter(lambda: fh.read(1 << 20), b""):
-                        fh_hash.update(chunk)
-                h.update(b"F" + rel + b"\0" + fh_hash.digest())
+                h.update(b"F" + rel + b"\0" + _hash_file(name, dir_fd=dirfd))
             else:
                 h.update(b"S" + rel + b"\0")
     return h.hexdigest()
@@ -465,6 +494,11 @@ def git_changes(src, dest, a):
     for borrowed in ("commondir", os.path.join("objects", "info", "alternates")):
         if os.path.lexists(os.path.join(gitdir, borrowed)):
             return "- git: not run (.git borrows from another repo: %s)" % q(borrowed)
+    for dirpath, dirnames, filenames in os.walk(gitdir, followlinks=False):
+        for n in dirnames + filenames:
+            if os.path.islink(os.path.join(dirpath, n)):
+                rel = os.path.relpath(os.path.join(dirpath, n), src)
+                return "- git: not run (.git borrows from another repo: %s is a link)" % q(rel)
     base = a.git_base or "HEAD"
     if base.startswith("-"):
         return "- git: not run (the base must be a commit, not an option: %s)" % q(base)
@@ -569,7 +603,10 @@ def main(argv=None):
     if a.fingerprint:
         if not os.path.lexists(a.src):
             sys.exit("snapshot: not found: " + q(a.src))
-        print(fingerprint(a.src))
+        try:
+            print(fingerprint(a.src))
+        except (FingerprintError, OSError) as e:
+            sys.exit("snapshot: fingerprint not taken: %s" % e)
         return
     if not a.dest:
         ap.error("DEST is required")

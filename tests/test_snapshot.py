@@ -240,14 +240,14 @@ class SnapshotTest(unittest.TestCase):
     def test_assigned_values_are_masked_in_full_and_code_is_left_alone(self):
         fake_pw = "abcd" + "1234" + "efgh"
         write(os.path.join(self.src, "code.py"), 'password = "%s"\r\n'
-              'token = get_token(request)\r\nsecret = self.secret_value\r\n' % fake_pw)
+              'token = get_token(request)\r\nsecret = load_secret(name)\r\n' % fake_pw)
         run(self.src, self.dest)
         with open(self.copied("code.py"), "rb") as fh:
             data = fh.read()
         self.assertNotIn(b"abcd", data)
         self.assertIn(b'password = "REDACTED"\r\n', data)
         self.assertIn(b"token = get_token(request)\r\n", data)
-        self.assertIn(b"secret = self.secret_value\r\n", data)
+        self.assertIn(b"secret = load_secret(name)\r\n", data)
 
     def test_non_utf8_and_utf16_files_are_still_redacted(self):
         with open(os.path.join(self.src, "latin.txt"), "wb") as fh:
@@ -428,9 +428,63 @@ class SnapshotTest(unittest.TestCase):
             new, n = snapshot.redact_text(key + value)
             self.assertEqual(n, 1, key)
             self.assertNotIn(value, new, key)
-        for code in ("token = get_token(request)", "secret = self.secret_value",
-                     "password = os.environ.get(", "api_key = config.api_key"):
+        # older gaps: values that look like code but are not, masked anyway
+        pairs += [("DB_PASSWORD=", "Spring" + "[2024]"), ("password: ", "Tr0ub" + "4dor(3)"),
+                  ("password=", "this.is." + "my.passphrase"), ("API_TOKEN=", "env.prod" + "Zx81kQ9wLm")]
+        for key, value in pairs[6:]:
+            new, n = snapshot.redact_text(key + value)
+            self.assertNotIn(value, new, key)
+        for code in ("token = get_token(request)", "password = os.environ.get(",
+                     "secret = os.environ[", "api_key = load_key()"):
             self.assertEqual(snapshot.redact_text(code), (code, 0), code)
+
+    def test_layouts_that_bounded_patterns_missed_are_masked(self):
+        value = "abcdefgh" + "12345678"
+        long_pw = "ya29." + "Q" * 245
+        cases = ["API_KEY" + " " * 12 + "= " + value, "password:\n  " + value,
+                 "Authorization: Bearer\n" + "T" * 30, "https://oauth2:" + long_pw + "@host.example/x",
+                 "secret = '" + "L" * 2500 + "'"]
+        for text in cases:
+            new, n = snapshot.redact_text(text)
+            self.assertGreaterEqual(n, 1, text[:30])
+        self.assertNotIn(long_pw, snapshot.redact_text(cases[3])[0])
+        self.assertNotIn("L" * 100, snapshot.redact_text(cases[4])[0])
+
+    def test_utf32_text_is_redacted(self):
+        with open(os.path.join(self.src, "wide32.txt"), "wb") as fh:
+            fh.write(("api_key = " + FAKE_KEY + "\n").encode("utf-32"))
+        run(self.src, self.dest)
+        with open(self.copied("wide32.txt"), "rb") as fh:
+            self.assertNotIn(FAKE_KEY, fh.read().decode("utf-32"))
+
+    def test_fingerprint_refuses_links_and_unreadable_files(self):
+        link = os.path.join(self.tmp, "link-to-work")
+        os.symlink(self.src, link)
+        with self.assertRaises(SystemExit):
+            run("--fingerprint", link)
+        locked = os.path.join(self.src, "locked.txt")
+        write(locked, "x")
+        os.chmod(locked, 0)
+        try:
+            with self.assertRaises(SystemExit):
+                run("--fingerprint", self.src)
+        finally:
+            os.chmod(locked, 0o600)
+        a, b = os.path.join(self.tmp, "a.bin"), os.path.join(self.tmp, "b.bin")
+        with open(a, "wb") as fh:
+            fh.write(b"0" * 100 + b"A")
+        with open(b, "wb") as fh:
+            fh.write(b"0" * 100 + b"B")
+        self.assertNotEqual(snapshot.fingerprint(a), snapshot.fingerprint(b))
+
+    def test_git_folder_with_a_linked_part_is_refused(self):
+        self.make_repo()
+        other = os.path.join(self.tmp, "other-objects")
+        os.rename(os.path.join(self.src, ".git", "objects"), other)
+        os.symlink(other, os.path.join(self.src, ".git", "objects"))
+        out = run(self.src, self.dest, "--session-work", "--diff-out", self.diff_path())
+        self.assertIn("is a link", out)
+        self.assertFalse(os.path.exists(self.diff_path()))
 
     def test_failure_removes_the_partial_copy(self):
         original = snapshot.redact_text
