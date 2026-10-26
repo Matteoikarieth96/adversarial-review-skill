@@ -381,6 +381,101 @@ class SnapshotTest(unittest.TestCase):
         self.assertIn("`README.md`", out)
         self.assertNotIn("`.env`,", out.split("- files in the copy:")[1])
 
+    # Review round 2 (diff review): lazy fetch, borrowed repos, slow patterns,
+    # partial copies, weaker masking, shell characters, fingerprints.
+
+    def test_partial_clone_is_refused(self):
+        sentinel = self.make_repo()
+        self.git("config", "extensions.partialClone", "origin")
+        self.git("config", "remote.origin.url", "ssh://example.invalid/repo.git")
+        self.git("config", "remote.origin.promisor", "true")
+        hook = os.path.join(self.tmp, "hook.sh")
+        self.git("config", "core.sshCommand", hook)
+        out = run(self.src, self.dest, "--session-work", "--diff-out", self.diff_path())
+        self.assertIn("git: not run (a partial clone", out)
+        self.assertFalse(os.path.exists(sentinel), "a configured program ran")
+        self.assertFalse(os.path.exists(self.diff_path()))
+
+    def test_protocol_settings_are_switched_off(self):
+        names = "core.bare\0protocol.ssh.allow\0protocol.file.allow\0protocolx.allow\0"
+        self.assertEqual(snapshot.protocol_overrides(names),
+                         ["-c", "protocol.ssh.allow=never", "-c", "protocol.file.allow=never"])
+
+    def test_git_folders_that_borrow_another_repo_are_refused(self):
+        self.make_repo()
+        with open(os.path.join(self.src, ".git", "commondir"), "w") as fh:
+            fh.write("../../other/.git\n")
+        out = run(self.src, self.dest, "--session-work", "--diff-out", self.diff_path())
+        self.assertIn("borrows from another repo", out)
+        os.unlink(os.path.join(self.src, ".git", "commondir"))
+        write(os.path.join(self.src, ".git", "objects", "info", "alternates"), "/elsewhere\n")
+        out = run(self.src, os.path.join(self.tmp, "ws2", "input", "target"), "--session-work",
+                  "--diff-out", os.path.join(self.tmp, "ws2", "changes.diff"))
+        self.assertIn("borrows from another repo", out)
+
+    def test_patterns_stay_fast_on_hostile_text(self):
+        for chunk in ("token", "a.", "eyJ-", "secret=" + "'" , "-----BEGIN ", "x://", "bearer "):
+            text = chunk * (300_000 // len(chunk))
+            start = time.time()
+            snapshot.redact_text(text)
+            self.assertLess(time.time() - start, 5, "slow on %r" % chunk)
+
+    def test_common_assigned_values_are_masked(self):
+        pairs = [("DB_PASSWORD=", "Summer" + "2024.Winter"), ("secret: ", "prodPass" + ".word99"),
+                 ("DB_PASSWORD=", "Xy7{k9" + "#Lm2qq}"), ("password=", "ab(cd)" + "efgh1234"),
+                 ("API_TOKEN=", "abc<def>" + "ghijkl"), ("password: ", "`hunter2" + "hunter2`")]
+        for key, value in pairs:
+            new, n = snapshot.redact_text(key + value)
+            self.assertEqual(n, 1, key)
+            self.assertNotIn(value, new, key)
+        for code in ("token = get_token(request)", "secret = self.secret_value",
+                     "password = os.environ.get(", "api_key = config.api_key"):
+            self.assertEqual(snapshot.redact_text(code), (code, 0), code)
+
+    def test_failure_removes_the_partial_copy(self):
+        original = snapshot.redact_text
+
+        def boom(text):
+            raise RuntimeError("stopped")
+        snapshot.redact_text = boom
+        try:
+            with self.assertRaises(RuntimeError):
+                run(self.src, self.dest)
+        finally:
+            snapshot.redact_text = original
+        self.assertFalse(os.path.lexists(self.copied()))
+
+    def test_names_with_shell_or_invisible_characters_are_escaped(self):
+        for n in ("notes$(touch PWNED)x.md", 'a"; touch PWNED2; echo ".md', "hid\U000e0100den.md",
+                  "fill\u3164er.md"):
+            write(os.path.join(self.src, n), "x")
+        out = run(self.src, self.dest)
+        for bad in ("$(touch", '"; touch', "\U000e0100", "\u3164"):
+            self.assertNotIn(bad, out)
+        self.assertIn("\\x24(touch PWNED)", out)
+
+    def test_fingerprint_changes_when_a_file_or_link_changes(self):
+        run(self.src, self.dest)
+        copy = self.copied()
+        first = snapshot.fingerprint(copy)
+        self.assertEqual(first, snapshot.fingerprint(copy))
+        os.chmod(copy, 0o700)
+        os.chmod(os.path.join(copy, "README.md"), 0o600)
+        with open(os.path.join(copy, "README.md"), "a") as fh:
+            fh.write("tampered\n")
+        second = snapshot.fingerprint(copy)
+        self.assertNotEqual(first, second)
+        os.unlink(os.path.join(copy, "README.md"))
+        os.symlink(self.outside, os.path.join(copy, "README.md"))
+        self.assertNotEqual(second, snapshot.fingerprint(copy))
+
+    def test_untracked_files_in_cache_folders_are_skipped(self):
+        self.make_repo()
+        write(os.path.join(self.src, "node_modules", "pkg", "index.js"), "CACHEDCONTENT1\n")
+        run(self.src, self.dest, "--session-work", "--diff-out", self.diff_path())
+        with open(self.diff_path()) as fh:
+            self.assertNotIn("CACHEDCONTENT1", fh.read())
+
     def test_git_does_not_rewrite_the_original_index(self):
         self.make_repo()
         index = os.path.join(self.src, ".git", "index")

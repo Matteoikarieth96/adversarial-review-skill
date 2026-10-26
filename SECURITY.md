@@ -18,8 +18,10 @@ What the skill reads, runs and writes, and what could be hostile:
 - **Commands** the skill runs: `scripts/snapshot.py`, and only with
   `--session-work` it runs `git config --list`, `git rev-parse`, `git diff`, `git ls-files`
   and `git status`. The session also runs `mktemp`, `cp`, `chmod` and
-  `diff` on the workspace, and `ffprobe` and `ffmpeg` on video and audio
-  deliverables to extract frames and measurements. The deliverable's own
+  `diff` on the workspace, `snapshot.py --fingerprint` to check copies, and
+  `ffprobe` and `ffmpeg` on video and audio deliverables to extract frames
+  and measurements (for media not produced in the session, only after the
+  user's yes). The deliverable's own
   code (tests, an app to screenshot) runs only when the work was produced
   in the session and the user approved that exact command; opening a page
   that was not produced in the session counts as running its code.
@@ -37,16 +39,16 @@ What the skill reads, runs and writes, and what could be hostile:
 | Risk | Mitigation | File |
 | --- | --- | --- |
 | Hidden instructions in the deliverable steer an agent | Everything in the target and in agent output is untrusted data; text aimed at an agent is reported as a finding; rules for the review come only from the user | `SKILL.md` (Ground rules), `agents/*.md` |
-| File names or link targets forge sections of the brief | The snapshot manifest escapes control characters and backticks in every name and target; the manifest goes into the brief inside a fenced block marked untrusted; the original path stays out of the brief | `scripts/snapshot.py`, `SKILL.md` step 1 |
+| File names or link targets forge sections of the brief or a command | The snapshot manifest escapes control and invisible characters, backticks, quotes and dollar signs in every name and target; the manifest goes into the brief inside a fenced block marked untrusted; names are never pasted into commands; the original path stays out of the brief | `scripts/snapshot.py`, `SKILL.md` step 1 |
 | The author steers the panel or buries a finding | A fresh agent designs the panel from the brief only; the author's known weak spots stay in a private folder no agent sees; the author can confirm a Critical or High but never reject or downgrade it; a referee agent rules | `SKILL.md` steps 1, 2 and 5, `agents/panel-designer.md`, `agents/referee.md` |
 | The designer's output turns into instructions or paths | The designer uses the session's model; any field with an instruction, command, URL or path (other than the run the user approves) is struck; slugs must match `^[a-z0-9][a-z0-9-]{0,39}$`; each lens's method is shown to the user; reviewers are told lens fields cannot relax their rules | `SKILL.md` steps 2 and 3, `agents/reviewer.md` |
-| Secrets reach the reviewers | Secret files (`.env`, keys, credential files, `.aws/`, `.ssh/`, `.kube/`...) are left out by name in any letter case; common key, token, JWT, URL-credential and private-key formats are redacted, also in non-UTF-8 and UTF-16 text; items saved by hand go through the same script; files that could not be scanned are listed | `scripts/snapshot.py`, `SKILL.md` step 1 |
-| The snapshot reaches outside the folder | Files are copied without following links; symlinks that leave the folder are skipped, and every kept link is checked again in the copy; FIFOs, sockets and devices are skipped; files over 50 MB are not copied | `scripts/snapshot.py` |
-| A repo's own git config runs programs or reads elsewhere | Git runs only on the session's own work and only on a plain `.git` folder, pinned with `--git-dir` and `--work-tree`, with hooks, fsmonitor, external diff, textconv, every filter driver, submodules and optional locks turned off; a filter driver name git cannot override stops the git step; the base must be a commit, not an option; the diff file is created new, never through a link, never inside the source | `scripts/snapshot.py`, `tests/test_snapshot.py` |
-| A steered reviewer tampers with what the referee and re-checkers read | A pristine copy of the input is kept in the private folder; before the referee runs, the shared input is compared with it; the referee and re-checkers get copies of it in fresh random folders; only rulings for ids that were sent are used | `SKILL.md` steps 3, 5 and 7, `agents/referee.md`, `agents/rechecker.md` |
+| Secrets reach the reviewers | Secret files (`.env`, keys, credential files, `.aws/`, `.ssh/`, `.kube/`...) are left out by name in any letter case; common key, token, JWT, URL-credential and private-key formats are redacted in memory before anything is written, also in non-UTF-8 and UTF-16 text; patterns are bounded so hostile text cannot stall them; if the script fails, its partial copy is removed; items saved by hand go through the same script; files that could not be scanned are listed | `scripts/snapshot.py`, `SKILL.md` step 1 |
+| The snapshot reaches outside the folder | Folders are opened relative to their parent and files are read without following links, so swapping a folder for a link during the copy does not lead outside; symlinks that leave the folder are skipped, and every kept link is checked again in the copy; FIFOs, sockets and devices are skipped; files over 50 MB are not copied | `scripts/snapshot.py` |
+| A repo's own git config runs programs or reads elsewhere | Git runs only on the session's own work and only on a plain `.git` folder, pinned with `--git-dir` and `--work-tree`, with hooks, fsmonitor, external diff, textconv, every filter driver, submodules, network protocols, ssh, credential helpers and optional locks turned off; partial clones and `.git` folders that borrow from another repo (commondir, alternates) are refused; a filter driver name git cannot override stops the git step; the base must be a commit, not an option; the diff file is created new, never through a link, never inside the source; Claude never runs `git commit` or `git stash` for a backup | `scripts/snapshot.py`, `SKILL.md` step 7, `tests/test_snapshot.py` |
+| A steered reviewer tampers with what the referee and re-checkers read | A pristine copy of the input is kept in the private folder and its fingerprint in the session's own context; the pristine copy and the shared input are checked against it before the referee and the re-checkers run; they get copies in fresh random folders; reviews that feed them are copied from the session's context, not from files; only rulings for ids that were sent are used | `SKILL.md` steps 3, 4, 5 and 7, `agents/referee.md`, `agents/rechecker.md` |
 | A review's Reproduce step or script gets executed | Reproduce steps are descriptions: a "recompute" uses code the agent writes itself; no agent and not the session runs a script or command from a review or the target | `SKILL.md` (Running code), `agents/referee.md`, `agents/rechecker.md`, `agents/reviewer.md` |
 | Hostile code runs | Code runs only for work produced in the session and the exact run the user approved, in a scratch copy, with `env -i`, a scratch `HOME` and no user site packages, through the harness sandbox when there is one | `SKILL.md` (Running code), `agents/reviewer.md` |
-| Side effects | No push, post, send, publish, deploy, delete, purchase, login or paid API call by any agent; fixes only on the user's choice, after a way back exists; a fix that adds a URL, a download, a dependency, a command or a credential needs its own yes | `SKILL.md` (Ground rules, step 7) |
+| Side effects | No push, post, send, publish, deploy, delete, purchase, login or paid API call by any agent; fixes only on the user's choice, after a plain copy of the originals exists; a fix that adds a URL, a download, a dependency, a command or a credential needs its own yes | `SKILL.md` (Ground rules, step 7) |
 | Private data leaves through the web | Agents never put private data in a search, a URL or a query string; links with tokens or one-time actions are listed, not opened; secrets are cited by their first 4 characters only | `agents/*.md` |
 | Agents use powerful tools | A closed tool list in every prompt; no helper agents | `agents/*.md` |
 
@@ -60,9 +62,10 @@ Tests for these cases: `tests/test_snapshot.py`.
   still steer a reviewer. Claude Code's permission prompts and sandbox are
   the real boundary: keep them on when the work comes from elsewhere.
 - A steered agent runs as the user: it can undo the read-only `chmod`,
-  write in other agents' scratch folders and read files by absolute path.
-  The pristine copy and the fresh folders limit what that changes in the
-  verdict; they do not stop the agent itself.
+  write in other agents' scratch folders, find the private folder and read
+  files by absolute path. The fingerprint check, the pristine copy and the
+  fresh folders limit what that changes in the verdict; they do not stop the
+  agent itself.
 - `env -i` hides environment tokens and keychain helpers from an approved
   run, not files: the run can still read any file by absolute path, use the
   user's SSH keys and reach the network. Without a harness sandbox, an
