@@ -64,6 +64,32 @@ After the report, it asks which fixes to apply.
 git clone https://github.com/Matteoikarieth96/adversarial-review-skill ~/.claude/skills/adversarial-review
 ```
 
+Recommended: install the two agent definitions. Claude Code then gives the
+agents no MCP connectors and no Agent tool, and the panel designer can only
+read. The reviewers keep Bash, Write and Edit, which can still reach the
+network, the `claude` and `gh` command-line tools and your settings files.
+The definitions also leave your CLAUDE.md files out (`omitClaudeMd`, a field
+present in Claude Code 2.1.304), and custom agents get no memory unless
+they ask for it (Claude Code docs):
+
+```bash
+mkdir -p ~/.claude/agents
+cp ~/.claude/skills/adversarial-review/claude-agents/adversarial-review-*.md ~/.claude/agents/
+```
+
+Copy them again after each update (copies, not symlinks). The skill checks
+that they match its copies, that no project folder has its own
+`.claude/agents/` (a project's agents win over yours), and that
+`~/.claude/agents` holds no symlink, no hard link and no other file that
+mentions the skill or contains a backslash or `!`; otherwise it falls back
+to `general-purpose` agents and says so. If the check fails mid-run, the
+review stops. Agents passed with `--agents` or set
+by managed settings are not checked. Restart Claude
+Code if `~/.claude/agents` did not exist before. Each definition adds one
+short line to the agent list every session sees. Without them, the skill
+still works, with the tool list as a request in the prompt only, and the
+report says so.
+
 Requirements:
 
 - Claude Code with the Agent tool. Without it, the skill plays the lenses one
@@ -95,14 +121,17 @@ la review".
 All figures are rough estimates built from one Standard run on the author's
 machine, not an average: in that run each reviewer took 5 to 11 minutes and
 roughly 120k to 170k tokens, all in parallel. The table covers the review
-only: applying fixes adds a re-check round (one to four more agents),
-roughly 0.15 to 0.8 million tokens and 20 to 40 minutes more. Token figures
-are the per-agent totals Claude Code reports. They leave out the main
-session's own work, which grows with the length of your chat, so in a long
-chat it is cheaper to run the review in a fresh session. A review uses your
-Claude Code usage: on a plan it takes a large share of your limits, and with
-API-key billing the bill is higher than the table. The skill calls no other
-paid service.
+only. Quick and Standard leave out the referee, which runs only when a
+finding is disputed (about 9 minutes and 100k to 200k tokens). Applying
+fixes adds one re-checker per lens whose Critical or High was fixed, in
+rounds of up to 3: about 100k to 200k tokens per re-checker and 10 minutes
+per round. Token figures are the per-agent totals Claude Code reports. They
+leave out the main session's own work, which grows with the length of your
+chat. Run the review in the session that did the work anyway: a fresh one
+would not know the request or the weak spots the author kept back. A review
+uses your Claude Code usage: on a plan it takes a large share of your
+limits, and with API-key billing the bill is higher than the table. The
+skill calls no other paid service.
 
 Expect permission prompts while the reviewers work, unless your settings
 already allow their tools. For work that comes from elsewhere (a cloned
@@ -135,8 +164,10 @@ Everything in the deliverable and everything the agents send back is treated
 as untrusted data: text aimed at an agent becomes a finding, never an
 instruction. The snapshot script escapes every name it prints, leaves out
 secret files and redacts secret-looking values; every reviewer, the referee
-and each re-checker gets its own copy of the input in a fresh folder. The rest are
-rules for language-model agents, not a sandbox: Claude Code's own
+and each re-checker gets its own copy of the input in a fresh folder. With the
+agent definitions installed, Claude Code enforces each agent's tool list
+(no MCP connectors, no helper agents; reviewers still have Bash).
+The rest are rules for language-model agents, not a sandbox: Claude Code's own
 permissions remain the real boundary. Details and residual risks:
 [SECURITY.md](SECURITY.md).
 
@@ -165,6 +196,9 @@ permissions remain the real boundary. Details and residual risks:
 - `references/report.md`: labels, verdict rules, report template.
 - `agents/panel-designer.md`, `agents/reviewer.md`, `agents/referee.md`,
   `agents/rechecker.md`: the agent prompts.
+- `references/steps-5-7.md`: verify, report, apply and re-check.
+- `claude-agents/`: the optional agent definitions (tool lists, no
+  CLAUDE.md).
 - `scripts/snapshot.py`: the read-only snapshot.
 - `tests/`: unit tests for the snapshot script.
 

@@ -107,8 +107,14 @@ and whether the panel found it.>
 ## Limits of this review
 <What no lens could check (logins, paid services, real devices, watching or
 listening in real time), the shared model, anything that ran without
-independence (author-designed panel, no Agent tool), any change an agent
-made to the shared input. Always end with: a verdict here is a model
+independence (author-designed panel, no Agent tool), a brief the user never
+confirmed (step 3 skipped), agents launched as `general-purpose` (tool list
+only requested, CLAUDE.md and project settings included) or, with the
+installed types, that agents from `--agents` or managed settings were not
+checked, a run compacted
+mid-way that fell back to files in `$PRIVATE`, any change an agent made to
+the shared input.
+Always end with: a verdict here is a model
 review, not a legal, financial, medical or security sign-off.>
 
 ## Applied
@@ -117,7 +123,9 @@ verdict after fixes.>
 
 ## Panel
 <Each lens: persona and question, one line, and the path of its review.
-Then the path of the brief every agent was given.>
+Then the path of the brief the reviewers were given (`$L/input/brief.md`).
+When step 3 changed the brief, also the path of the earlier version the
+first designer saw (`$WS/input/brief.md`) and what changed.>
 ```
 
 ## Chat summary

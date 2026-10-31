@@ -626,6 +626,89 @@ class SnapshotTest(unittest.TestCase):
         run(self.src, self.dest, "--session-work", "--diff-out", self.diff_path())
         self.assertEqual(os.stat(index).st_mtime_ns, before)
 
+    def test_wallet_webhook_and_cloud_secrets_are_redacted(self):
+        evm = "0x" + "4c0883a69102937d6231471b5dbb6204fe512961708279f2e3e8a5d4b8e3c1a1"[:64]
+        words = " ".join(["abandon", "ability", "able", "about", "above", "absent",
+                          "absorb", "abstract", "absurd", "abuse", "access", "zoo"])
+        cases = {
+            "evm.txt": "deployer %s\n" % evm,
+            "seed.env.txt": "WALLET_SEED=%s\n" % words,
+            "seed-alone.txt": "%s\n" % words,
+            "deployer.sh": "export DEPLOYER_KEY=%s\n" % ("H" * 40),
+            "mnemonic.ts": "const mnemonic = '%s'\n" % words,
+            "discord.txt": "https://discord.com/api/webhooks/123456789012/" + "I" * 60 + "\n",
+            "bot.py": "bot = Bot('123456789:" + "J" * 35 + "')\n",
+            "stripe.txt": "whsec_" + "K" * 32 + "\n",
+            "google.json": '{"secret": 1, "id": "GOCSPX-' + "L" * 28 + '"}\n',
+            "mail.txt": "SG." + "M" * 22 + "." + "N" * 43 + "\n",
+            "curl.sh": "curl -H 'Authorization: " + "Basic " + "dXNlcjpz" + "M2NyZXQ=' x\n",
+            "azure.txt": "DefaultEndpointsProtocol=https;AccountKey=" + "O" * 86 + "==;x\n",
+            "req.txt": "Cookie: session=" + "P" * 30 + "\n",
+        }
+        secrets = [evm, words, "H" * 40, "I" * 60, "J" * 35, "K" * 32, "L" * 28, "M" * 22,
+                   "dXNlcjpzM2NyZXQ", "O" * 86, "P" * 30]
+        for name, body in cases.items():
+            write(os.path.join(self.src, "s", name), body)
+        run(self.src, self.dest)
+        for name in cases:
+            with open(self.copied("s", name)) as fh:
+                text = fh.read()
+            for secret in secrets:
+                self.assertNotIn(secret, text, name)
+
+    def test_public_hashes_and_prose_are_kept(self):
+        tx = "0x" + "ab" * 32
+        body = ("tx hash: %s\nhttps://etherscan.io/tx/%s\nblock %s\n"
+                "a basic understanding of the problem\n"
+                "we will review the report and send our notes to you\n"
+                "the quick brown fox jumps over the lazy dog, every single morning\n"
+                "a primary_key: id\n") % (tx, tx, tx)
+        write(os.path.join(self.src, "notes.md"), body)
+        run(self.src, self.dest)
+        with open(self.copied("notes.md")) as fh:
+            self.assertEqual(fh.read(), body)
+
+    def test_layouts_found_by_the_redaction_review(self):
+        key = "0x" + "4c" * 32
+        words = "abandon ability able about above absent absorb abstract absurd abuse access zoo"
+        jwt = "eyJ" + "h" * 18 + ".eyJ" + "p" * 18 + "." + "FAKEsig12345"
+        leaks = {
+            "ROOT_SIGNER=" + key: key, "const txSigner='%s'" % key: key,
+            "// tx signer key: " + key: key, "BLOCKCHAIN_PK=" + key: key, "owner = " + key: key,
+            "Authorization: " + "Basic " + jwt: "FAKEsig12345",
+            'Set-Cookie: API_KEY="' + "Q" * 20 + '"': "Q" * 20,
+            '{"Cookie": "sid=' + "R" * 20 + '"}': "R" * 20,
+            'document.cookie = "sid=' + "S" * 20 + '"': "S" * 20,
+            "curl -b 'sid=" + "T" * 20 + "' x": "T" * 20,
+            "https://api.telegram.org/bot123456789:" + "U" * 35 + "/sendMessage": "U" * 35,
+            "https://discord.com/api/v10/webhooks/123456789012/" + "V" * 40: "V" * 40,
+            "- " + words: "absorb abstract", "| " + words.upper() + " |": "ABSORB ABSTRACT",
+            "MNEMONIC=" + words.upper(): "ABSORB", "mnemonic: `" + words + "`": "absorb", words + ".": "absorb",
+            'accountKey: "' + "W" * 20 + '"': "W" * 20, "signing-key=" + "X" * 20: "X" * 20,
+        }
+        tx = "0x" + "9f" * 32
+        kept = ["| 0x12 | %s |" % tx, "See %s on Etherscan" % tx, "bytes32 constant MINTER_ROLE = " + tx,
+                "topics: [\"%s\"]" % tx, "primary_key: user_identifier", "sort_keys=True",
+                'publicKey = "04abcdef1234567"', "Cookie: a small file we store", "## Cookie: what we store"]
+        text = "\n".join(list(leaks) + kept) + "\n"
+        write(os.path.join(self.src, "layouts.txt"), text)
+        run(self.src, self.dest)
+        with open(self.copied("layouts.txt")) as fh:
+            out = fh.read()
+        for secret in leaks.values():
+            self.assertNotIn(secret, out)
+        for line in kept:
+            self.assertIn(line, out)
+
+    def test_more_secret_file_names_are_left_out(self):
+        names = ["client_secret_123.apps.json", "kubeconfig", ".dockercfg", ".boto", "auth.json",
+                 "UTC--2026-10-31T10-00-00Z--abcdef"]
+        for n in names:
+            write(os.path.join(self.src, "f", n), "x\n")
+        run(self.src, self.dest)
+        for n in names:
+            self.assertFalse(os.path.exists(self.copied("f", n)), n)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -42,7 +42,7 @@ What the skill reads, runs and writes, and what could be hostile:
 | File names or link targets forge sections of the brief or a command | The snapshot manifest escapes control and invisible characters, backticks, quotes and dollar signs in every name and target; the manifest goes into the brief inside a fenced block marked untrusted; names are never pasted into commands; the original path stays out of the brief | `scripts/snapshot.py`, `SKILL.md` step 1 |
 | The author steers the panel or buries a finding | A fresh agent designs the panel from the brief only; the author's known weak spots stay in a private folder no agent sees; the author can confirm a Critical or High but never reject or downgrade it; a referee agent rules | `SKILL.md` steps 1, 2 and 5, `agents/panel-designer.md`, `agents/referee.md` |
 | The designer's output turns into instructions or paths | The designer uses the session's model; any field with an instruction, command, URL or path (other than the run the user approves) is struck; slugs must match `^[a-z0-9][a-z0-9-]{0,39}$`; each lens's method is shown to the user; reviewers are told lens fields cannot relax their rules | `SKILL.md` steps 2 and 3, `agents/reviewer.md` |
-| Secrets reach the reviewers | Secret files (`.env`, keys, credential files, `.aws/`, `.ssh/`, `.kube/`...) are left out by name in any letter case; common key, token, JWT, URL-credential and private-key formats are redacted in memory before anything is written, also in non-UTF-8, UTF-16 and UTF-32 text; values that only look like code are masked too (masking too much beats leaking); patterns are bounded so hostile text cannot stall them; if the script fails, its partial copy is removed; items saved by hand go through the same script; files that could not be scanned are listed | `scripts/snapshot.py`, `SKILL.md` step 1 |
+| Secrets reach the reviewers | Secret files (`.env`, keys, credential files, `.aws/`, `.ssh/`, `.kube/`...) are left out by name in any letter case; common key, token, JWT, URL-credential and private-key formats are redacted, plus `0x` wallet keys in assignments, seed phrases, webhook URLs (Slack, Discord), bot, webhook-signing, OAuth-client, mail-API, Basic-auth, Azure account-key and cookie values, in memory before anything is written, also in non-UTF-8, UTF-16 and UTF-32 text; values that only look like code are masked too (masking too much beats leaking); patterns are bounded so hostile text cannot stall them; if the script fails, its partial copy is removed; items saved by hand go through the same script; files that could not be scanned are listed | `scripts/snapshot.py`, `SKILL.md` step 1 |
 | The snapshot reaches outside the folder | Folders are opened relative to their parent and files are read without following links, so swapping a folder for a link during the copy does not lead outside; symlinks that leave the folder are skipped, and every kept link is checked again in the copy; FIFOs, sockets and devices are skipped; files over 50 MB are not copied | `scripts/snapshot.py` |
 | A repo's own git config runs programs or reads elsewhere | Git runs only on the session's own work and only on a plain `.git` folder, pinned with `--git-dir` and `--work-tree`, with hooks, fsmonitor, external diff, textconv, every filter driver, submodules, network protocols, ssh, credential helpers and optional locks turned off; partial clones and `.git` folders that borrow from another repo (commondir, alternates, any link inside `.git`) are refused; a filter driver name git cannot override stops the git step; the base must be a commit, not an option; the diff file is created new, never through a link, never inside the source; Claude never runs `git commit` or `git stash` for a backup | `scripts/snapshot.py`, `SKILL.md` step 7, `tests/test_snapshot.py` |
 | A steered agent tampers with what other agents or the session read | The input is locked before the first agent (the panel designer) sees it; every reviewer, the referee and each re-checker gets its own copy of a pristine input in a fresh random folder; the pristine copy's fingerprint and a `shasum` of the skill's own prompts and script are kept in the session's context and checked before every later use; the session fills every prompt from the skill files it read before any agent ran, and keeps returned reviews and known items in its context; only rulings for ids that were sent are used; no step deletes anything | `SKILL.md` steps 1, 3, 4, 5 and 7, `agents/referee.md`, `agents/rechecker.md` |
@@ -50,16 +50,29 @@ What the skill reads, runs and writes, and what could be hostile:
 | Hostile code runs | Code runs only for work produced in the session and the exact run the user approved, in a scratch copy, with `env -i`, a scratch `HOME` and no user site packages, through the harness sandbox when there is one | `SKILL.md` (Running code), `agents/reviewer.md` |
 | Side effects | No push, post, send, publish, deploy, delete, purchase, login or paid API call by any agent; fixes only on the user's choice, after a plain copy of the originals exists (`cp -RH`, so a linked folder is really copied); a fix that adds a URL, a download, a dependency, a command or a credential needs its own yes | `SKILL.md` (Ground rules, step 7) |
 | Private data leaves through the web | Agents never put private data in a search, a URL or a query string; links with tokens or one-time actions are listed, not opened; secrets are cited by their first 4 characters only | `agents/*.md` |
-| Agents use powerful tools | A closed tool list in every prompt; no helper agents | `agents/*.md` |
+| Agents use powerful tools | With the agent definitions installed, Claude Code enforces each tool list: no MCP tools and no Agent tool, a designer with only Read, Grep and Glob; the installed files are compared with the skill's copies, and any project agents folder, added folder with agents, symlink or hard link in `~/.claude/agents`, or other file there whose name or text mentions the skill or that contains a backslash or `!` (a YAML escape or tag could spell its name) sends every agent back to `general-purpose`; the check runs again right before each launch, and a failure mid-run stops the review; agents from `--agents` or managed settings are not checked. Reviewers keep Bash, Write and Edit (see Residual risks). Without the definitions, a closed tool list in every prompt | `claude-agents/*.md`, `SKILL.md` (Ground rules, step 1), `agents/*.md` |
+| The user's own instructions or a project's settings reach the agents | The installed definitions set `omitClaudeMd` (present in Claude Code 2.1.304), and per the Claude Code docs custom agents get no memory unless they ask for it; every prompt tells agents to ignore CLAUDE.md, memory and project settings; a CLAUDE.md, `.claude/` or `.mcp.json` inside the target is the target's; step 3 shows the agent type and the permission mode | `claude-agents/*.md`, `SKILL.md` (Ground rules, steps 1 and 3), `agents/*.md` |
+| A compacted conversation loses the later steps or the fingerprints | Steps 5 to 7 live in a reference file the session re-reads after checking the `shasum` list; a note at the top of SKILL.md says how to resume; the values are also saved in the private folder, and the report says when it had to rely on them | `SKILL.md`, `references/steps-5-7.md` |
 
 Tests for these cases: `tests/test_snapshot.py`.
 
 ## Residual risks
 
-- The rules for the agents are instructions to a language model, not
-  enforced permissions. Agents are launched as `general-purpose`, with every
-  tool the session has. A well-crafted injection in the deliverable can
-  still steer a reviewer. Claude Code's permission prompts and sandbox are
+- Without the agent definitions installed, the rules for the agents are
+  instructions to a language model, not enforced permissions: agents are
+  launched as `general-purpose`, with every tool the session has (MCP
+  connectors included), the user's CLAUDE.md files and the working
+  directory's project settings. With them, the tool list is enforced, but
+  reviewers still have Bash, Write and Edit, which run as the user: through
+  them a steered reviewer can reach the network, start `claude` or `gh`
+  with your login, or edit your settings files and agent definitions. They
+  inherit the session's permission mode: in auto or bypass mode nothing
+  prompts.
+- After a compaction, the skill resumes only on values the harness's
+  summary kept; when they are missing, the user chooses between a fresh
+  start and files a steered agent could have edited. A well-crafted injection in the deliverable can still steer a
+  reviewer.
+- Agents start in the session's working directory, whatever their type. Claude Code's permission prompts and sandbox are
   the real boundary: keep them on when the work comes from elsewhere.
 - A steered agent runs as the user: it can undo the read-only `chmod`,
   write in other agents' folders, find the private folder, read files by
@@ -84,6 +97,16 @@ Tests for these cases: `tests/test_snapshot.py`.
   masks show as `REDACTED(line-break)`, the manifest lists the files that
   have them, and every agent is told that `REDACTED` in code can hide what a
   line does.
+- Some wallet secrets are found by shape, not by a list. A `0x` 64-digit hex
+  value is masked only when it is assigned to a name that is not a hash word,
+  or a key word (`key`, `pk`, `priv`, `signer`, `wallet`...) comes just
+  before it on its line. Alone on a line, in a table, in prose or after
+  `tx`, `hash`, `block` or `topic`, it stays visible, so transaction hashes
+  can be checked; a private key written that way reaches the reviewers, and
+  so does one without `0x`. A seed phrase is found as 12 to 24 words of 3 to
+  8 letters on one line (alone, in a list or table cell, or after `=`, `:`, a
+  quote or a backtick), not one word per line; a plain line of 12 such words
+  is masked too.
 - The snapshot goes to the same model provider as the rest of the session.
   Real personal data should be replaced by a synthetic sample, as the skill
   asks.

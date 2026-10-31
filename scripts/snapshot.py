@@ -47,6 +47,8 @@ SECRET_NAMES = [
     "credentials.*", "*credentials*.json", "service-account*.json",
     "token.json", "secrets.*", "*secrets*.yml", "*secrets*.yaml",
     "settings.local.json", "*.tfvars", "*.tfstate", "*.tfstate.*",
+    "client_secret*.json", "kubeconfig", "kubeconfig.*", "*.kubeconfig",
+    ".dockercfg", ".boto", "auth.json", "utc--*",
 ]
 SECRET_DIRS = {".aws", ".ssh", ".gnupg", ".docker", ".kube"}
 KEEP_NAMES = {".env.example", ".env.sample", ".env.template"}
@@ -71,13 +73,61 @@ SECRET_PATTERNS = [
     re.compile(r"https://hooks\.slack\.com/services/[A-Za-z0-9/_-]+"),
     re.compile(r"(?i)\bbearer\s+[A-Za-z0-9._~+/-]{16,}=*"),
 ]
+# Formats added after the first release. They run after every pass of that
+# release (patterns, JWTs, assignments, URL credentials), so whatever it
+# masked is masked the same way and masking only grows.
+NEW_TOKEN_PATTERNS = [
+    re.compile(r"(?i)https?://(?:ptb\.|canary\.)?discord(?:app)?\.com/api/(?:v[0-9]{1,2}/)?webhooks/[0-9]{5,30}/[A-Za-z0-9_-]+"),
+    re.compile(r"(?<![0-9A-Za-z])(?:bot)?[0-9]{6,12}:[A-Za-z0-9_-]{35}(?![A-Za-z0-9_-])"),  # Telegram bot token
+    re.compile(r"\bwhsec_[A-Za-z0-9+/=]{20,}"),
+    re.compile(r"\bGOCSPX-[A-Za-z0-9_-]{20,}"),
+    re.compile(r"\bSG\.[A-Za-z0-9_-]{16,}\.[A-Za-z0-9_-]{16,}"),
+    re.compile(r"(?i)\b(?:AccountKey|SharedAccessKey)=[A-Za-z0-9+/]{20,}={0,2}"),
+]
+# These run after the assignment passes, so a key inside them (a cookie named
+# API_KEY, a JWT after "Basic") is masked by those passes first.
+LATE_PATTERNS = [
+    re.compile(r"(?i:\bbasic)[^\S\r\n]+(?=[A-Za-z0-9+/._-]{0,200}[0-9+/=])[A-Za-z0-9+/._-]{12,}={0,2}"),
+    # Cookie headers and cookies in code: a name=value pair is required, so
+    # prose such as "Cookie: a small file" stays.
+    re.compile(r"(?i)(?<![\w-])(?:set-)?cookie[\"']?[^\S\r\n]{0,20}[:=][^\S\r\n]{0,20}[\"']?"
+               r"[!#$%&*+.^_`|~\w-]{1,64}=(?:[^\r\n'\"]|\"[^\r\n\"]{0,4096}\"){1,4096}"),
+    re.compile(r"(?<![\w-])(?:-b|--cookie)[^\S\r\n]{1,10}[\"']?[!#$%&*+.^_`|~\w-]{1,64}=[^\r\n\"']{4,4096}"),
+]
+# A BIP-39 seed phrase: 12 to 24 words of 3 to 8 letters (any case, up to 3
+# spaces apart), alone on a line (a list marker allowed) or after "=", ":",
+# a quote, a backtick, "|" or ">", up to the line end, a quote or punctuation.
+# Masked whole: the first 4 letters of a BIP-39 word identify it.
+SEED = re.compile(r"(?mi)(?:^|(?<=[\"'=:`|>]))(?P<pre>[^\S\r\n]{0,20}(?:(?:[-*+>]|[0-9]{1,2}[.)])[^\S\r\n]{1,4})?)"
+                  r"(?P<w>(?:[a-z]{3,8}[ \t]{1,3}){11}[a-z]{3,8}(?:(?:[ \t]{1,3}[a-z]{3,8}){3}){0,4})"
+                  r"(?=[ \t]{0,20}(?:[.,;`|#]|\r?$|[\"']))")
+# The rest of a seed phrase whose first word an assignment pass already masked.
+SEED_TAIL = re.compile(r"(?mi)(?<=REDACTED)(?P<pre>[ \t]{1,3})"
+                       r"(?P<w>(?:[a-z]{3,8}[ \t]{1,3}){10}[a-z]{3,8}(?:(?:[ \t]{1,3}[a-z]{3,8}){3}){0,4})"
+                       r"(?=[ \t]{0,20}(?:[.,;`|#]|\r?$|[\"']))")
+# A 32-byte hex value is an EVM private key or a public hash (transaction,
+# block, topic, role). It is masked when a key word comes just before it on
+# its line, or when it is assigned to a name that is not a hash word; in
+# tables, prose, lists and URLs it stays, so transaction hashes can be checked.
+HEX32 = re.compile(r"(?<![/\w])0x[0-9a-fA-F]{64}(?![0-9a-fA-F])")
+HEX_SECRET_WORDS = re.compile(r"(?i)key|pk|priv|secret|signer|wallet|deployer|mnemonic|seed")
+HEX_PUBLIC_WORDS = re.compile(r"(?<![a-z])(?i:tx|txid|txn|hash|transaction|block|root|topic|commit|role|slot"
+                              r"|constant|bytes32|salt|event|log)(?![a-z])")
+HEX_ASSIGNED = re.compile(r"[=:][^\S\r\n]{0,10}[\"'`]?$")
+# Names ending in _key / Key whose value is not a secret.
+PUBLIC_KEY_WORDS = {"public", "primary", "foreign", "partition", "sort", "cache", "row", "hash",
+                    "range", "lookup", "map", "dict", "composite", "unique", "index", "group"}
 TOKEN_RUN = re.compile(r"[A-Za-z0-9_.-]{30,}")  # JWTs are found inside these runs
 B64URL = re.compile(r"[A-Za-z0-9_-]{10,}")
 # The suffix is matched once and never retried (lookahead plus backreference,
 # an atomic group that Python 3.9 understands): a separator can only follow
 # the whole word anyway, and retrying made long runs of key words slow.
-KEYS = (r"(?:api[_-]?key|secret|token|passw(?:or)?d|private[_-]?key|access[_-]?key)"
-        r"(?=(?P<sfx>[A-Za-z0-9_]{0,40}))(?P=sfx)")
+SFX = r"(?=(?P<sfx>[A-Za-z0-9_]{0,40}))(?P=sfx)"
+KEYS = r"(?:api[_-]?key|secret|token|passw(?:or)?d|private[_-]?key|access[_-]?key)" + SFX
+# Key words added later get their own passes after the ones above, so they can
+# never take a match away from them (masking only grows).
+KEYS_MORE = (r"(?:mnemonic|seed[_-]?phrase|(?<=[a-z0-9])[_-]key(?![a-z])"
+             r"|(?-i:(?<=[a-z0-9])Key(?![a-z])))" + SFX)
 # Separators: any spacing but line breaks (NBSP and other Unicode spaces too),
 # one optional line break before ":" or "=", and the value on the same line or
 # on the next one (a blank line allowed) when that line is not itself a key.
@@ -95,11 +145,18 @@ NOT_A_KEY = (r"(?![\"']?[\w.-]+[\"']?(?:" + WS + r"*:(?:\s|$)|" + WS + r"+=|=" +
 NOT_A_QKEY = r"(?![\"'][\w.-]+[\"']" + WS + r"*[:=])"
 # Value masked in full; the key and the quotes stay. The same-line passes run
 # first, so a next-line pass that masks a quoted key masks nothing secret.
-ASSIGN_QUOTED_LINE = re.compile(r"(?i)(?P<key>" + KEYS + SEP_LINE + r")(?P<q>[\"'])(?P<val>[^\"'\r\n]{8,})(?P=q)")
-ASSIGN_QUOTED_NEXT = re.compile(r"(?i)(?P<key>" + KEYS + SEP_NEXT + NOT_A_QKEY + r")(?P<q>[\"'])"
-                                r"(?P<val>[^\"'\r\n]{8,})(?P=q)")
-ASSIGN_BARE = re.compile(r"(?i)(?P<key>" + KEYS + SEP_LINE + r")(?P<val>[^\s\"',;]{8,})")
-ASSIGN_BARE_NEXT = re.compile(r"(?i)(?P<key>" + KEYS + SEP_NEXT + NOT_A_KEY + r")(?P<val>[^\s\"',;]{8,})")
+def assign_patterns(keys):
+    return (
+        re.compile(r"(?i)(?P<key>" + keys + SEP_LINE + r")(?P<q>[\"'])(?P<val>[^\"'\r\n]{8,})(?P=q)"),
+        re.compile(r"(?i)(?P<key>" + keys + SEP_NEXT + NOT_A_QKEY + r")(?P<q>[\"'])"
+                   r"(?P<val>[^\"'\r\n]{8,})(?P=q)"),
+        re.compile(r"(?i)(?P<key>" + keys + SEP_LINE + r")(?P<val>[^\s\"',;]{8,})"),
+        re.compile(r"(?i)(?P<key>" + keys + SEP_NEXT + NOT_A_KEY + r")(?P<val>[^\s\"',;]{8,})"),
+    )
+
+
+ASSIGN_QUOTED_LINE, ASSIGN_QUOTED_NEXT, ASSIGN_BARE, ASSIGN_BARE_NEXT = assign_patterns(KEYS)
+ASSIGN_MORE = assign_patterns(KEYS_MORE)
 CROSS_LINE = "REDACTED(line-break)"
 URL_CREDENTIALS = re.compile(r"(?i)(\b[a-z][a-z0-9+.-]{0,20}://[^\s:/@]+:)([^\s@/]+)(@)")
 # Bare values that are code, not literals: a known accessor (getenv, environ,
@@ -215,12 +272,34 @@ def redact_text(text):
 
     for pat in SECRET_PATTERNS:
         text = pat.sub(sub_whole, text)
+
+    def sub_seed(m):
+        nonlocal count
+        count += 1
+        return m.group("pre") + "REDACTED(seed phrase)"
+
+    def sub_hex(m):
+        nonlocal count
+        before = re.split(r"[\r\n]", text[max(0, m.start() - 40):m.start()])[-1]
+        if not HEX_SECRET_WORDS.search(before) and (
+                HEX_PUBLIC_WORDS.search(before) or not HEX_ASSIGNED.search(before)):
+            return m.group(0)
+        count += 1
+        return mask(m.group(0))
+
     text, n = redact_jwts(text)
     count += n
 
+    def public_key_name(m):
+        key = m.group("key")
+        if not (key[:1] in "_-" or key.startswith("Key")):
+            return False
+        word = re.search(r"([A-Za-z]{1,30})$", m.string[max(0, m.start() - 30):m.start()])
+        return bool(word) and word.group(1).lower() in PUBLIC_KEY_WORDS
+
     def sub_quoted(m):
         nonlocal count
-        if m.group("val").startswith("REDACTED("):
+        if m.group("val").startswith("REDACTED(") or public_key_name(m):
             return m.group(0)
         count += 1
         mark = CROSS_LINE if any(c in m.group("key") for c in "\r\n") else "REDACTED"
@@ -229,7 +308,7 @@ def redact_text(text):
     def sub_bare(m):
         nonlocal count
         value = m.group("val")
-        if value.startswith("REDACTED(") or is_code_value(value):
+        if value.startswith("REDACTED(") or is_code_value(value) or public_key_name(m):
             return m.group(0)
         count += 1
         return m.group("key") + (CROSS_LINE if any(c in m.group("key") for c in "\r\n") else "REDACTED")
@@ -244,6 +323,18 @@ def redact_text(text):
     text = ASSIGN_BARE.sub(sub_bare, text)
     text = ASSIGN_BARE_NEXT.sub(sub_bare, text)
     text = URL_CREDENTIALS.sub(sub_url, text)
+    for pat in NEW_TOKEN_PATTERNS:
+        text = pat.sub(sub_whole, text)
+    text = SEED.sub(sub_seed, text)
+    text = SEED_TAIL.sub(sub_seed, text)
+    text = HEX32.sub(sub_hex, text)
+    more_quoted_line, more_quoted_next, more_bare, more_bare_next = ASSIGN_MORE
+    text = more_quoted_line.sub(sub_quoted, text)
+    text = more_quoted_next.sub(sub_quoted, text)
+    text = more_bare.sub(sub_bare, text)
+    text = more_bare_next.sub(sub_bare, text)
+    for pat in LATE_PATTERNS:
+        text = pat.sub(sub_whole, text)
     return text, count
 
 
