@@ -94,9 +94,15 @@ la review".
 
 All figures are rough estimates built from one Standard run on the author's
 machine, not an average: in that run each reviewer took 5 to 11 minutes and
-roughly 120k to 170k tokens, all in parallel. A review uses your Claude Code
-usage: on a plan it takes a large share of your limits, and with API-key
-billing you pay for those tokens. The skill calls no other paid service.
+roughly 120k to 170k tokens, all in parallel. The table covers the review
+only: applying fixes adds a re-check round (one to four more agents),
+roughly 0.15 to 0.8 million tokens and 20 to 40 minutes more. Token figures
+are the per-agent totals Claude Code reports. They leave out the main
+session's own work, which grows with the length of your chat, so in a long
+chat it is cheaper to run the review in a fresh session. A review uses your
+Claude Code usage: on a plan it takes a large share of your limits, and with
+API-key billing the bill is higher than the table. The skill calls no other
+paid service.
 
 Expect permission prompts while the reviewers work, unless your settings
 already allow their tools. For work that comes from elsewhere (a cloned

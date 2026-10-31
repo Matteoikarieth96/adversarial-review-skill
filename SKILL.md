@@ -221,9 +221,11 @@ Leave out how you built it, what was hard, and what you think is weak.
 
 **Known items.** Now write `$PRIVATE/known.md`: every weak spot or open item
 you know about, each with your own severity, before the panel exists. Then
-reread the brief and take out anything that points at one of them (a claim
-phrased to steer, a context line that is really a hint). Known items never go
-to an agent; steps 5 and 6 compare them with the findings and show them to
+reread the brief and take out anything you wrote that points at one of them
+(a claim phrased to steer, a context line that is really a hint). Take out
+only your own text: the user's words (the request, their concerns, their
+rules) stay as they are, even when they touch a known item. Known items never
+go to an agent; steps 5 and 6 compare them with the findings and show them to
 the user.
 
 **Lock the input** before any agent sees it: make it read only, keep a
@@ -283,18 +285,31 @@ report that the panel was designed by the author.
 Show, in the user's language:
 - **Target**: what will be reviewed, which version or commit.
 - **Yardstick**: the request in one line.
+- **What the panel is told**: the brief's "Claims to test", "Context and
+  stakes" and "User's concerns", in three to six lines that quote the brief,
+  then "Anything missing or wrong?". The brief steers every lens and the
+  referee, and only you wrote it, so the user sees it before any reviewer
+  runs.
 - **Panel**: a short table (lens, the question it answers, runs code with
   the exact command or "no", opens the web yes or no). Mark each run "no
   sandbox: can read your files, use your SSH keys and the network" when the
   harness has none.
-- **Cost**, by phase. From the first run of this skill (one Standard run,
-  not an average): the designer about 2 minutes; each reviewer 5 to 11
-  minutes and about 120k to 170k tokens, all in parallel; the referee, when
-  needed, and each re-checker about 9 minutes. In total, roughly 0.4 to 0.6
-  million tokens for Quick, 0.6 to 1.1 million for Standard and 1 to 1.6
-  million for Deep; on API billing the user pays for them. A Standard run
-  takes about 30 to 55 minutes end to end; Quick about 20 to 30 and Deep
-  about 45 to 70. All of these are rough estimates from one run: say so.
+- **Cost**, by phase, as two figures per depth. From the first run of this
+  skill (one Standard run, not an average), counted as the per-agent token
+  totals Claude Code reports, not as billed tokens: the designer about 2
+  minutes; each reviewer 5 to 11 minutes and about 120k to 170k tokens, all
+  in parallel; the referee (always in Deep, at any depth when a Critical or
+  High is sent to it) and each re-checker about 9 minutes and, by estimate,
+  100k to 200k tokens. **Review only**: roughly 0.4 to 0.6 million tokens
+  for Quick, 0.6 to 1.1 million for Standard and 1 to 1.6 million for Deep;
+  about 20 to 30 minutes end to end for Quick, 30 to 55 for Standard and 45
+  to 70 for Deep. **With fixes and re-check** (step 7, one to four more
+  agents): add roughly 0.15 to 0.8 million tokens and 20 to 40 minutes.
+  Neither figure includes this session's own work (about a hundred tool
+  calls, each one resending the whole conversation), which grows with the
+  length of the chat: on API billing the bill is higher than these totals,
+  and in a long chat suggest running the review in a fresh session. All of
+  these are rough estimates from one run: say so.
 
 Ask once with `AskUserQuestion` (a numbered plain-text question when it is
 not available), recommended option first, each option with a
@@ -308,12 +323,12 @@ designer for its spec.
 
 Skip the question when the user already set the depth or said to go (for
 example `/adversarial-review deep`, "vai", "parti"), and show target,
-yardstick, panel and cost in four lines instead. When the words could mean a
+yardstick, what the panel is told, panel and cost in a few lines instead. When the words could mean a
 depth or just hurry ("quick please"), take them as the depth and say so in
 those lines. Approval to run code is the one thing a skip does not cover: if
 a lens runs code, ask a yes or no for those runs, or set them to "no".
 
-If the answer changes the brief (concerns, lenses), change it in the
+If the answer changes the brief (claims, stakes, concerns, lenses), change it in the
 pristine copy, which every agent's copy comes from from now on: check the
 pristine copy against your fingerprint (different: stop and tell the user),
 then `chmod u+w "$PRIVATE/input-pristine/brief.md"`, edit it, `chmod a-w` it
@@ -438,8 +453,9 @@ Then ask with `AskUserQuestion` which to apply, each option's `preview`
 showing the concrete change. Four items or fewer (Fix first plus the
 improvements shown): a multi-select of the items. More: "Apply Fix first
 (Recommended)" / "Fix first + top improvements" / "Only the report", and the
-free-text answer can pick by id (F1, I3). Nothing to apply: skip the
-question.
+free-text answer can pick by id (F1, I3). When a choice fixes a Critical or
+High, its option says that a re-check follows and what it adds (step 3
+figures). Nothing to apply: skip the question.
 
 ## Step 7. Apply and re-check
 
@@ -481,8 +497,11 @@ question.
    with `home/` and `tmp/`, and only then make the inputs read only:
    `chmod -R a-w "$V/before" "$V/target" "$V/fix.diff" "$V/<slug>-review.md"`.
    Launch one agent per lens that raised a fixed Critical or High (at most
-   3) with [agents/rechecker.md](agents/rechecker.md); when the fixes
-   rewrote a large part of the deliverable, add Goal fit. When they return,
+   3 per round) with [agents/rechecker.md](agents/rechecker.md); when the
+   fixes rewrote a large part of the deliverable, add Goal fit. The order is
+   fixed, never your choice: lenses with a fixed Critical first, then those
+   with a fixed High, each group by the lowest item id. Lenses past the cap
+   go in a second round, launched the same way once the first returns. When they return,
    fingerprint each `$V/before` and `$V/target` again: a difference is a
    finding against that re-check.
 5. Recompute the verdict as "Verdict after fixes" with the rules in

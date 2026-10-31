@@ -11,6 +11,7 @@ Every Critical and High ends with exactly one status:
 | Rejected | the referee only | evidence against it | does not count |
 | Could not check | the referee only | the referee could not redo the check | counts |
 | Pending referee | the author | sent to the referee, no ruling yet | counts |
+| Pending re-check | the author | fixed, but no re-checker has said Fixed yet | counts |
 
 The author never rejects or downgrades a Critical or High. Mediums the
 author thinks are wrong are listed as **Contested** with the reason; they do
@@ -56,8 +57,11 @@ average the scores.
 - **Regression** found by a re-checker: a new finding. A Critical or High
   regression is Confirmed if you reproduce it, otherwise Pending referee,
   exactly as in step 5.
-- Items fixed without a re-check (Mediums, improvements, lenses over the cap
-  of 3): mark them "fixed, checked by the author" in the Applied section.
+- Mediums and improvements fixed without a re-check: mark them "fixed,
+  checked by the author" in the Applied section.
+- A Critical or High never leaves the verdict on the author's word: fixed
+  but not yet re-checked (a round still to run, a re-checker that failed),
+  it is **Pending re-check**, counts, and the verdict line names it.
 
 Then apply the verdict rules above to what is left.
 
@@ -112,7 +116,8 @@ review, not a legal, financial, medical or security sign-off.>
 verdict after fixes.>
 
 ## Panel
-<Each lens: persona and question, one line, and the path of its review.>
+<Each lens: persona and question, one line, and the path of its review.
+Then the path of the brief every agent was given.>
 ```
 
 ## Chat summary
