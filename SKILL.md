@@ -1,6 +1,6 @@
 ---
 name: adversarial-review
-description: Adversarial review of a finished result by a panel of 3 to 8 independent reviewer agents, with lenses picked for that output (goal fit, a refuter, the end reader, specialists such as a fact-checker). Works on anything a task produced (code, report, post, deck, design, plan, skill, data, video). Returns one verdict with per-lens scores and ranked fixes and improvements, applied only on the user's choice. Use it when the user wants a finished result challenged, judged or stress-tested, usually right after a task, for example "adversarial review", "review avversariale", "fai partire la review", "critica quello che hai fatto", "metti alla prova il risultato", "cosa non va in quello che hai fatto", "dammi un verdetto", "red team this", "poke holes in it". Not for a bug hunt on a diff or PR (code-review), a security pass on pending changes (security-review), skill evals or trigger tuning (skill-creator), releasing a skill (skill-release), or a quick proofread or opinion (answer directly).
+description: Adversarial review of any finished result by a panel of independent agents, with one verdict and ranked fixes. Use when the user wants a result challenged, judged or stress-tested, e.g. "adversarial review", "review avversariale", "fai partire la review", "critica quello che hai fatto", "dammi un verdetto". Not for a bug hunt on a diff or PR (code-review) or releasing a skill (skill-release).
 ---
 
 # adversarial-review
@@ -14,6 +14,10 @@ The panel is never a fixed list. A financial report, a social media post, a
 shell script and a product label fail in different ways, so the lenses come
 from the output itself:
 what kind of thing it is, who will receive it, and what breaks if it is wrong.
+
+Not for: a bug hunt on a diff or PR (code-review), a security pass on pending
+changes (security-review), skill evals or trigger tuning (skill-creator),
+releasing a skill (skill-release), a quick proofread or opinion (answer directly).
 
 `$SKILL` below is the folder that contains this file.
 
